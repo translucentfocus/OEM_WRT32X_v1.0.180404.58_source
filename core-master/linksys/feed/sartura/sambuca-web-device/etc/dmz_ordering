@@ -1,0 +1,13 @@
+#!/bin/sh
+
+# Check if the DMZ section exist
+
+DMZ_section=$(uci -q get firewall.DMZ)
+
+if [ "$DMZ_section" == "redirect" ]; then
+	# Get sections count
+	get_count=$(uci show firewall | cut -d '.' -f2 | cut -d '=' -f1 | uniq | wc -l)
+
+	uci reorder firewall.DMZ=$get_count
+	uci commit firewall
+fi

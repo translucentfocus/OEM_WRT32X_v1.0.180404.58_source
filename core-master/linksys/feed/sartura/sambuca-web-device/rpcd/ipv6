@@ -1,0 +1,49 @@
+#!/bin/sh
+
+get_section="$(uci -q show firewall | grep -w 'Allow-all-IPv6' | cut -d '.' -f1,2 | head -1)"
+
+case "$1" in
+	list)
+		echo '{ "allow": {}, "drop": {}, "status": {} }'
+	;;
+	call)
+		case "$2" in
+			allow)
+				if [ ! -z "$get_section" ]; then
+					$(uci set $get_section.enabled='1')
+				else
+					$(uci add firewall rule)
+					$(uci set firewall.@rule[-1].name=Allow-all-IPv6)
+					$(uci set firewall.@rule[-1].src=wan)
+					$(uci set firewall.@rule[-1].dest=lan)
+					$(uci set firewall.@rule[-1].proto=all)
+					$(uci set firewall.@rule[-1].family=ipv6)
+					$(uci set firewall.@rule[-1].target=ACCEPT)
+					$(uci set firewall.@rule[-1].enabled=1)
+				fi
+
+				$(uci commit firewall)
+				$(/etc/init.d/firewall restart)
+
+				printf '{ "values": { "status":"ok" }}'
+			;;
+			drop)
+				if [ ! -z "$get_section" ]; then
+					$(uci set $get_section.enabled='0')
+					$(uci commit firewall)
+					$(/etc/init.d/firewall restart)
+				fi
+
+				printf '{ "values": { "status":"ok" }}'
+			;;
+			status)
+				ipv6_stat="$(uci -q get $get_section.enabled)"
+
+				# Set as disabled if there is no section
+				[ -z "$ipv6_stat" ] && ipv6_stat="0"
+
+				printf '{ "values": { "status":"%s" }}', $ipv6_stat
+			;;
+		esac
+	;;
+esac

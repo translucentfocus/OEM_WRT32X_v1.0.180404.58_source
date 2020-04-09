@@ -1,0 +1,20 @@
+diff --git a/src/wps/wps_attr_build.c b/src/wps/wps_attr_build.c
+index 770f5e9..5973604 100755
+--- a/src/wps/wps_attr_build.c
++++ b/src/wps/wps_attr_build.c
+@@ -298,6 +298,7 @@ int wps_build_auth_type_flags(struct wps_data *wps, struct wpabuf *msg)
+ 	auth_types &= ~WPS_AUTH_WPA;
+ 	auth_types &= ~WPS_AUTH_WPA2;
+ 	auth_types &= ~WPS_AUTH_SHARED;
++	auth_types &= ~WPS_AUTH_WPAPSK;
+ #ifdef CONFIG_WPS_TESTING
+ 	if (wps_force_auth_types_in_use) {
+ 		wpa_printf(MSG_DEBUG,
+@@ -319,6 +320,7 @@ int wps_build_encr_type_flags(struct wps_data *wps, struct wpabuf *msg)
+ {
+ 	u16 encr_types = WPS_ENCR_TYPES;
+ 	encr_types &= ~WPS_ENCR_WEP;
++	encr_types &= ~WPS_ENCR_TKIP;
+ #ifdef CONFIG_WPS_TESTING
+ 	if (wps_force_encr_types_in_use) {
+ 		wpa_printf(MSG_DEBUG,

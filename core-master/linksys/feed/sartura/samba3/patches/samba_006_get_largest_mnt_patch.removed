@@ -1,0 +1,102 @@
+--- samba-3.0.28a.orig/source/smbd/trans2.c	2008-03-08 07:56:27.000000000 -0800
++++ samba-3.0.28a/source/smbd/trans2.c	2012-01-18 11:26:21.000000000 -0800
+@@ -1,4 +1,8 @@
+-/* 
++/*
++   Modifications were made by Cisco Systems, Inc. on or before Mon Dec 9 12:00:00 PST 2012 
++*/
++
++/*
+    Unix SMB/CIFS implementation.
+    SMB transaction2 handling
+    Copyright (C) Jeremy Allison			1994-2007
+@@ -45,6 +49,37 @@
+ 				files_struct *fsp,
+ 				const SMB_STRUCT_STAT *psbuf);
+ 
++
++static int get_largest_mnt(char *path, char *ret_buf) {
++	struct vfs_statvfs_struct sb;
++	unsigned long long parent_id;
++	unsigned long long child_id;
++	DIR *dp;
++	struct dirent *ep;
++	unsigned long long largest = 0;
++	if (sys_statvfs(path, &sb) == -1) {
++		return -1;
++	}
++	parent_id = sb.FsIdentifier;
++
++	dp = opendir(path);
++	if (dp == NULL) return -1;
++	chdir(path);
++	
++	while ( (ep = readdir(dp)) ) {
++		if (sys_statvfs(ep->d_name, &sb) == -1) {
++			return -1;
++		}
++		child_id = sb.FsIdentifier;
++		if (child_id != parent_id) {
++			if (sb.TotalBlocks > largest) {
++				largest = sb.TotalBlocks;
++				fstrcpy(ret_buf, ep->d_name);
++			}
++		}
++	}
++	return largest > 0 ? 1 : 0;
++}
+ /********************************************************************
+  Roundup a value to the nearest allocation roundup size boundary.
+  Only do this for Windows clients.
+@@ -2303,7 +2338,24 @@
+ 		{
+ 			SMB_BIG_UINT dfree,dsize,bsize,block_size,sectors_per_unit,bytes_per_sector;
+ 			data_len = 18;
+-			if (get_dfree_info(conn,".",False,&bsize,&dfree,&dsize) == (SMB_BIG_UINT)-1) {
++			fstring path, dirpath;
++			char *dirp = dirpath;
++
++			int result;
++			fstring path_to_largest;
++			
++			result = get_largest_mnt(lp_pathname(snum), path_to_largest); 
++			if (result) {
++				fstrcpy(dirpath, conn->dirpath);
++				if(strequal(conn->dirpath, "") || strequal(conn->dirpath, "./"))
++					fstr_sprintf(path,"%s/%s", lp_pathname(snum), path_to_largest);
++				else
++					fstr_sprintf(path,"%s/%s", lp_pathname(snum),strsep(&dirp, "/"));
++			}else {
++				fstrcpy(path, ".");
++			}
++
++			if (get_dfree_info(conn,path,False,&bsize,&dfree,&dsize) == (SMB_BIG_UINT)-1) {
+ 				return(UNIXERROR(ERRHRD,ERRgeneral));
+ 			}
+ 
+@@ -2407,7 +2459,24 @@
+ 		{
+ 			SMB_BIG_UINT dfree,dsize,bsize,block_size,sectors_per_unit,bytes_per_sector;
+ 			data_len = 24;
+-			if (get_dfree_info(conn,".",False,&bsize,&dfree,&dsize) == (SMB_BIG_UINT)-1) {
++			fstring path, dirpath;
++			char *dirp = dirpath;
++
++			int result;
++			fstring path_to_largest;
++			
++			result = get_largest_mnt(lp_pathname(snum), path_to_largest); 
++			if (result) {
++				fstrcpy(dirpath, conn->dirpath);
++				if(strequal(conn->dirpath, "") || strequal(conn->dirpath, "./"))
++					fstr_sprintf(path,"%s/%s", lp_pathname(snum), path_to_largest);
++				else
++					fstr_sprintf(path,"%s/%s", lp_pathname(snum),strsep(&dirp, "/"));
++			}else {
++				fstrcpy(path, ".");
++			}
++
++			if (get_dfree_info(conn,path,False,&bsize,&dfree,&dsize) == (SMB_BIG_UINT)-1) {
+ 				return(UNIXERROR(ERRHRD,ERRgeneral));
+ 			}
+ 			block_size = lp_block_size(snum);

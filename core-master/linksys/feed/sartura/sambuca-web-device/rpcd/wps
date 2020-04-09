@@ -1,0 +1,53 @@
+#!/bin/sh
+
+case "$1" in
+	list)
+		echo '{ "pin": {}, "valid": {"pin":"str"} }'
+	;;
+	call)
+		case "$2" in
+			pin)
+				wps_pin="$(uci get linksys.@hardware[0].wps_device_pin)"
+				printf '{ "values": { "pin":"%s" }}', $wps_pin
+			;;
+			valid)
+				read input
+				ap_pin="$(echo "$input" | jsonfilter -e '@.pin')"
+
+				# Use the checksum to validate the entry before using that PIN
+				[ "$(printf $ap_pin | wc -c)" == 8 ]; {
+					if [ "$(printf $ap_pin | cut -c 1)" == 0 ]; then
+						# Truncate first char if 0
+						ap_pin="$(echo $ap_pin | cut -c 2,3,4,5,6,7,8)"
+					fi
+						acc_num=0
+
+						acc_num=$((acc_num + 3 * (($ap_pin / 10000000) % 10)));
+						acc_num=$((acc_num + 1 * (($ap_pin / 1000000) % 10)));
+						acc_num=$((acc_num + 3 * (($ap_pin / 100000) % 10)));
+						acc_num=$((acc_num + 1 * (($ap_pin / 10000) % 10)));
+						acc_num=$((acc_num + 3 * (($ap_pin / 1000) % 10)));
+						acc_num=$((acc_num + 1 * (($ap_pin / 100) % 10)));
+						acc_num=$((acc_num + 3 * (($ap_pin / 10) % 10)));
+						acc_num=$((acc_num + 1 * (($ap_pin / 1) % 10)));
+
+						return_value=$((acc_num % 10))
+
+						if [ "$return_value" == 0 ]; then
+							wiface="$(ls /var/run/hostapd)"
+							valid_pin=1
+
+							for x in $wiface; do
+								$(hostapd_cli -i $x wps_pin any $ap_pin &> /dev/null)
+							done
+						else
+							valid_pin=0
+						fi
+
+				}
+
+				printf '{ "values": { "status":"%s" }}', $valid_pin
+			;;
+		esac
+	;;
+esac

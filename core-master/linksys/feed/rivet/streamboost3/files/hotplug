@@ -1,0 +1,30 @@
+#!/bin/sh
+
+if [ "$INTERFACE" != "wan" -a "$INTERFACE" != "lan" ]; then
+	return 0
+fi
+
+logger -t "hotplug" "Received action: $ACTION for interface: $INTERFACE"
+
+# We need to explicitly redirect the commands below because on some systems,
+# hotplug passes invalid stdout/stderr descriptors, causing random errors in
+# the script.
+# Backgrounding the operations will help ensure short handling times and
+# therefore less chances of out-of-order events, and will prevent calls to
+# exit by the streamboost command from halting/aborting the entire hotplug
+# event handling chain.
+case "$ACTION" in
+	add)
+		/etc/init.d/streamboost3 fwup >/dev/null 2>&1 &
+	;;
+	remove)
+		/etc/init.d/streamboost3 fwdn >/dev/null 2>&1 &
+	;;
+	ifup)
+		/etc/init.d/streamboost3 ifup >/dev/null 2>&1 &
+	;;
+	ifdn|ifdown)
+		/etc/init.d/streamboost3 ifdn >/dev/null 2>&1 &
+	;;
+esac
+

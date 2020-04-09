@@ -1,0 +1,21 @@
+#!/bin/sh
+
+# Set DHCP limit
+
+firstboot=$(uci get linksys.@firmware[0].eula_accepted)
+
+if [ "$firstboot" != "1" ]; then
+	uci set dhcp.lan.limit='154'
+	uci commit dhcp
+fi
+
+# Set openvpn options
+dhcp_conf=/etc/config/dhcp
+
+# Cannot set list with uci
+if [ "$(grep -w "option resolvfile" $dhcp_conf)" ];then
+	sed -i "s/option resolvfile/list resolvfile/g" $dhcp_conf
+	sed -i "/list resolvfile/a\	list resolvfile '/tmp/resolv.conf.openvpn'" $dhcp_conf
+fi
+
+exit 0

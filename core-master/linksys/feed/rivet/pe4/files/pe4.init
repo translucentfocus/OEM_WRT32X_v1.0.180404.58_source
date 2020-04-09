@@ -1,0 +1,36 @@
+#!/bin/sh
+
+#
+# Required config
+#
+SERVICE="pe4"
+POLICY_FILE=${STREAMBOOST_CFGDIR:=/etc/streamboost3}/policy1.conf
+ALIAS_FILE=${STREAMBOOST_CFGDIR:=/etc/streamboost3}/alias.conf
+
+. ${STREAMBOOST_CFGDIR:=/etc/streamboost3}/rc.streamboost3
+
+START=32
+STOP=68
+
+#
+# Environment config
+#
+
+#
+# Command line parameters
+#
+OPTIONS_RUN="--daemon \
+-p ${PIDFILE} \
+-n ${SERVICE} \
+-f ${POLICY_FILE} \
+-a ${ALIAS_FILE} \
+"
+
+enable() {
+	default_enable_premium "$@"
+}
+
+#
+# MAIN
+#
+action "$@"

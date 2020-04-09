@@ -1,0 +1,13 @@
+Index: ubus-2016-07-02/cli.c
+===================================================================
+--- ubus-2016-07-02.orig/cli.c
++++ ubus-2016-07-02/cli.c
+@@ -17,7 +17,7 @@
+ #include "libubus.h"
+ 
+ static struct blob_buf b;
+-static int timeout = 30;
++static int timeout = 75;
+ static bool simple_output = false;
+ static int verbose = 0;
+ static int monitor_dir = -1;

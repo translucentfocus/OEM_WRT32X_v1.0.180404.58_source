@@ -1,0 +1,98 @@
+#!/bin/sh
+
+# LED variables
+wan_blue="system.wan_blue.trigger"
+wan_amber="system.wan_amber.trigger"
+
+# WAN state saved in sambuca config - webUI use
+wan_stat="sambuca.sambuca.wan"
+
+# Default value
+local ping_lock="0"
+
+while true; do
+
+local uci_change="0"
+
+	# Check for the global LED state
+	led_state="$(uci -q get sambuca.sambuca.led)"
+
+	# Check for the link status
+	detect_link="$(swconfig dev switch0 port 4 get link | awk '{print $2}')"
+
+	# If up, check for internet connectivity
+	if [ "$detect_link" == "link:up" ]; then
+
+		# Perform initial ping, then lock it until the timeout
+		if [ "$ping_lock" == "0" ]; then
+			$(ping -qc1 -w1 heartbeat.belkin.com &> /dev/null)
+			[ "$?" == "0" ] && local connStat=1 || local connStat=2
+			lan_iface="$(uci -q get network.lan.ipaddr)"
+			$(ping -n -qc1 -w1 heartbeat.belkin.com | grep $lan_iface &> /dev/null)
+			[ "$?" == "0" ] && local connStat=2
+		elif [ "$ping_lock" == "2" ]; then
+			$(nslookup www.belkin.com &> /dev/null)
+			[ "$?" == "0" ] && local connStat=1 || local connStat=2
+		fi
+
+		if [ "$connStat" == 1 ]; then
+			# Success - Turn amber LED off if needed, turn blue LED on
+			if [ "$led_state" == "1" ]; then
+				[ "$(uci -q get $wan_amber)" != "none" ] && uci set $wan_amber='none' && uci_change=1
+				[ "$(uci -q get $wan_blue)" != "default-on" ] && uci set $wan_blue='default-on' && uci_change=1
+			fi
+
+			# Set timeout to 30 secs
+			[ ! "$s_timeout" ] && local s_timeout=1
+			if [[ $s_timeout -lt 30 ]]; then
+				$((s_timeout++)) &> /dev/null
+				local ping_lock=1
+			else
+				local s_timeout=""
+				local ping_lock=2
+			fi
+		else
+			# No connection - Turn blue LED off if needed, turn amber LED on
+			if [ "$led_state" == "1" ]; then
+				[ "$(uci -q get $wan_blue)" != "none" ] && uci set $wan_blue='none' && uci_change=1
+				[ "$(uci -q get $wan_amber)" != "default-on" ] && uci set $wan_amber='default-on' && uci_change=1
+			fi
+
+			# Set timeout to 5 secs
+			[ ! "$f_timeout" ] && local f_timeout=1
+			if [[ $f_timeout -lt 5 ]]; then
+				$((f_timeout++)) &> /dev/null
+				local ping_lock=1
+			else
+				local f_timeout=""
+				local ping_lock=0
+			fi
+		fi
+	else
+		# Link is down, turn down LED's and reset the timers
+		connStat=0
+		if [ "$led_state" == "1" ]; then
+			[ "$(uci -q get $wan_blue)" != "none" ] && uci set $wan_blue='none' && uci_change=1
+			[ "$(uci -q get $wan_amber)" != "none" ] && uci set $wan_amber='none' && uci_change=1
+		fi
+
+		local s_timeout=""
+		local f_timeout=""
+		local ping_lock=0
+	fi
+
+	# Save sambuca config
+	if [ "$(uci -q get $wan_stat)" != "$connStat" ]; then
+		uci set $wan_stat=$connStat
+		uci commit sambuca
+	fi
+
+	# Save changes and restart the LED's
+	if [ "$uci_change" == "1" -a "$led_state" == "1" ]; then
+		uci commit system
+		/etc/init.d/led restart &> /dev/null
+	fi
+
+	# Check for the link status every second
+	sleep 1
+done

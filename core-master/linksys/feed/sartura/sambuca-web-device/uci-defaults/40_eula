@@ -1,0 +1,10 @@
+#!/bin/sh
+
+# Check for EULA
+eula=$(uci -q get linksys.@firmware[0].eula_accepted)
+
+# If option eula_accepted doesn't exist, set it to 0. Else, it's not firstboot
+[[ -z $eula ]] && uci set linksys.@firmware[0].eula_accepted=0
+
+exit 0
+

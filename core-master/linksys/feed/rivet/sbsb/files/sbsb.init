@@ -1,0 +1,162 @@
+#!/bin/sh
+
+#
+# Required config
+#
+SERVICE="sbsb"
+BINARY="sbsb"
+
+. ${STREAMBOOST_CFGDIR:=/etc/streamboost3}/rc.streamboost3
+
+SB3_DEVNAME="/dev/sbsb"
+RULES="/etc/streamboost3/sbsb.conf"
+
+START=21
+STOP=79
+
+start() {
+	echo -n "Setting up ${SERVICE} rules... "
+
+	[ ! -e ${SB3_DEVNAME} ] && {
+		echo "[ FAIL ]"
+		return 1
+	}
+
+	# Only add rule files that exist, log failures
+	RULE_LIST="/dev/null"
+	for rule in ${RULES}; do
+		if [ -e ${rule} ]; then
+			RULE_LIST="${RULE_LIST} ${rule}"
+		else
+			sb_logger "could not find rules file ${rule}"
+		fi
+	done
+
+	# Fail if we don't have sufficient permissions
+	cat ${RULE_LIST} > ${SB3_DEVNAME} 2>/dev/null
+	retval=$?
+	[ ! ${retval} = 0 ] && {
+		echo "[ FAIL ]"
+		sb_logger "failed to cat rule list: ${RULE_LIST}"
+		return 1
+	}
+	echo "[ OK ]"
+	return 0
+}
+
+
+stop() {
+	echo -n "Stopping ${SERVICE}... "
+
+	[ ! -e ${SB3_DEVNAME} ] && {
+		echo "[ FAIL ]"
+		return 1
+	}
+
+	echo "" > ${SB3_DEVNAME}
+	# Might not have sufficient permissions to write to device
+	retval=$?
+	[ ! $retval = 0 ] && {
+		echo "[ FAIL ]"
+		return $retval
+	}
+	echo "[ OK ]"
+	return 0
+}
+
+shutdown() {
+	echo -n "Shutting down ${SERVICE}... "
+	rm -f ${SB3_DEVNAME}
+
+	rmmod ${BINARY} >/dev/null 2>&1
+	if [ ! $? = 0 ]; then
+		echo "[ FAIL ]"
+		sb_logger "could not remove ${BINARY} module."
+		return 1
+	fi
+	echo "[ OK ]"
+}
+
+status() {
+	local state=0 enabled=0
+	# Check if we are enabled
+	enabled 1>/dev/null && {
+		enabled=1
+	}
+	# if sbsb is installed then determine if it's running or turned off
+	if is_sbsb_installed; then
+		if [ ! -e ${SB3_DEVNAME} ]; then
+			state=2
+		else
+			state=1
+		fi
+	fi
+
+	# return if the --verbose flag was not set and disabled and not running
+	if [ -z "$VERBOSE" -a $enabled = 0 -a $state = 0 ]; then
+		return 0
+	fi
+
+	# If the verbose flag is set then echo our enabled state
+	if [ "$VERBOSE" = "yes" ]; then
+		[ $enabled = 0 ] && echo -n "[ DISABLED ]" || echo -n "[ ENABLED ]"
+	fi
+
+	# echo our current state
+	if [ $state = 1 ]; then
+		echo "[  UP  ] ${SERVICE} is running."
+	elif [ $state = 2 ]; then
+		echo "[ DOWN ] ${SERVICE} is turned off."
+	else
+		echo "[ DOWN ] ${SERVICE} is not installed."
+	fi
+}
+
+boot() {
+	echo -n "Booting ${SERVICE}... "
+	is_nexus_installed || {
+		echo "[ FAIL ]"
+		sb_logger "nexus module is not installed"
+		return 1
+	}
+	echo "[ OK ]"
+
+	is_sbsb_installed || {
+		echo -n "Installing ${BINARY}... "
+		insmod_ko ${BINARY} >/dev/null 2>&1
+		retval=$?
+		[ ! ${retval} = 0 ] && {
+			echo "[ FAIL ]"
+			sb_logger "insmod failed with code ${retval}"
+			return ${retval}
+		}
+		echo "[ OK ]"
+	}
+
+	if [ ! -e ${SB3_DEVNAME} ]; then
+		echo -n "Creating ${SERVICE} log: ${SB3_DEVNAME}... "
+		local major=$(cat /proc/devices | grep sbsb | awk '{ print $1 }')
+		#set up log file
+		mknod ${SB3_DEVNAME} c ${major} 0 >/dev/null 2>&1
+		retval=$?
+		[ ! $retval = 0 ] && {
+			echo "[ FAIL ]"
+			sb_logger "mknod failed with code ${retval}"
+			return $retval
+		}
+		echo "[ OK ]"
+	fi
+
+	start "$@"
+}
+
+info() {
+	echo "${SERVICE} info"
+	PKGNAME="kmod-sbsb"
+	default_info_disk "$@"
+}
+
+#
+# MAIN
+#
+action "$@"

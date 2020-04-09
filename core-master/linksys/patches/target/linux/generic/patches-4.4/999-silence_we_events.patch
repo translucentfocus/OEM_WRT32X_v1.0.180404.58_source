@@ -1,0 +1,19 @@
+Silentce the propietary Marvell driver caused console spam
+
+--- a/net/wireless/wext-core.c
++++ b/net/wireless/wext-core.c
+@@ -508,12 +508,12 @@
+ 	if (descr->header_type == IW_HEADER_TYPE_POINT) {
+ 		/* Check if number of token fits within bounds */
+ 		if (wrqu->data.length > descr->max_tokens) {
+-			netdev_err(dev, "(WE) : Wireless Event (cmd=0x%04X) too big (%d)\n",
++			netdev_dbg(dev, "(WE) : Wireless Event (cmd=0x%04X) too big (%d)\n",
+ 				   cmd, wrqu->data.length);
+ 			return;
+ 		}
+ 		if (wrqu->data.length < descr->min_tokens) {
+-			netdev_err(dev, "(WE) : Wireless Event (cmd=0x%04X) too small (%d)\n",
++			netdev_dbg(dev, "(WE) : Wireless Event (cmd=0x%04X) too small (%d)\n",
+ 				   cmd, wrqu->data.length);
+ 			return;
+ 		}

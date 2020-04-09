@@ -1,0 +1,14 @@
+#!/bin/sh
+
+START=55
+boot() {
+
+lanip=$(uci get network.lan.ipaddr)
+
+grep -q "myrouter.local/$lanip" /etc/config/dhcp
+if [ $? -eq 1 ] ; then
+# add a redirect myrouter.local to our IP
+	uci add_list dhcp.@dnsmasq[0].address="/myrouter.local/$lanip"
+	uci commit dhcp
+fi
+}

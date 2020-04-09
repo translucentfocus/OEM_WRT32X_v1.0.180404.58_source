@@ -1,0 +1,61 @@
+#!/bin/sh
+
+# Check if the section exist for USB 3.0
+uci -q get system.led_usb3_1
+
+if [ "$(echo $?)" == "1" ]; then
+	uci set system.led_usb3_1=led
+	uci set system.led_usb3_1.name='USB3_1'
+	uci set system.led_usb3_1.sysfs='pca963x:venom:blue:usb3_1'
+	uci set system.led_usb3_1.interval='50'
+	uci set system.led_usb3_1.dev='3-1'
+	uci set system.led_usb3_1.trigger='usbdev'
+fi
+
+# Power led
+
+uci -q get system.led_power
+
+if [ "$(echo $?)" == "1" ]; then
+	uci set system.led_power=led
+	uci set system.led_power.name='POWER'
+	uci set system.led_power.sysfs='venom:blue:power'
+	uci set system.led_power.trigger='none'
+	uci set system.led_power.default='1'
+fi
+
+# WAN blue and amber LED's
+
+uci -q get system.wan_blue
+
+if [ "$(echo $?)" == "1" ]; then
+	uci set system.wan_blue=led
+	uci set system.wan_blue.name='WAN_CONN'
+	uci set system.wan_blue.sysfs='pca963x:venom:blue:wan'
+	uci set system.wan_blue.trigger='default-on'
+fi
+
+uci -q get system.wan_amber
+
+if [ "$(echo $?)" == "1" ]; then
+	uci set system.wan_amber=led
+	uci set system.wan_amber.name='WAN_NOCONN'
+	uci set system.wan_amber.sysfs='pca963x:venom:amber:wan'
+	uci set system.wan_amber.trigger='none'
+fi
+
+# E-sata LED
+
+uci -q get system.led_esata
+
+if [ "$(echo $?)" == "1" ]; then
+	uci set system.led_esata=led
+	uci set system.led_esata.name='E_SATA'
+	uci set system.led_esata.sysfs='venom:blue:sata'
+	uci set system.led_esata.trigger='none'
+	uci set system.led_esata.default='0'
+fi
+
+uci commit system
+
+exit 0

@@ -1,0 +1,195 @@
+#!/bin/sh
+
+#
+# Required config
+#
+SERVICE="qdiscman3"
+START=25
+STOP=75
+
+. ${STREAMBOOST_CFGDIR:=/etc/streamboost3}/rc.streamboost3
+
+START=25
+STOP=75
+
+QDISC_CRON_CMD="streamboost3 sync_qdiscs"
+QDISC_TIME_INTERVAL="*/7"
+
+# determine whether or not we need to setup NSS or Linux qdiscs
+if use_nss; then
+	. ${STREAMBOOST_CFGDIR}/qos_setup_nss.sh
+else
+	. ${STREAMBOOST_CFGDIR}/qos_setup.sh
+fi
+
+#
+# config
+#
+
+# Format the command line parameters
+OPTIONS_RUN="\
+--daemon \
+--run-dir=${RUNDIR} \
+--pid-file=${PIDFILE} \
+--ifname-up=${WAN_IFACE} \
+--ifname-down=${LAN_IFACE} \
+--agr-percent=100 \
+${EXTRA_CMD_ARGS} \
+"
+
+#
+# Functions
+#
+is_qos_scripts_installed() {
+	local installed=1
+	echo -n "${SERVICE}: checking qos-scripts installation... "
+
+	# Check if qos-scripts is installed
+	if [ -n "$(opkg list qos-scripts)" ]; then
+		if ls /etc/rc.d/*qos >/dev/null 2>&1; then
+			sb_logger "ERROR: qos-scripts is installed and enabled"
+			installed=0
+		fi
+	fi
+
+	# check if qos-scripts iptables rules are in place
+	if iptables -t mangle -L qos_Default  >/dev/null 2>&1 ||
+		iptables -t mangle -L qos_Default_ct >/dev/null 2>&1; then
+		sb_logger "ERROR: qos-scripts iptables rules are in place"
+		installed=0
+	fi
+
+	if [ $installed -eq 0 ]; then
+		echo "[ FAIL ]"
+	else
+		echo "[ OK ]"
+	fi
+
+	return $installed
+}
+
+start() {
+	retval=0
+	if is_qos_scripts_installed; then
+		sb_logger "qos-scripts is installed and enabled, bypassing qdisc setup on ${SERVICE} start"
+	else
+		sb_logger "Seting up qos-scripts on ${SERVICE} start"
+		errlog=$(qos_onstart 2>&1)
+		retval=$?
+	fi
+
+	if [ ! $retval -eq 0 ]; then
+		echo "[ FAIL ]"
+		sb_logger "${errlog}"
+		return $retval
+	fi
+
+	default_start "$@" && {
+		local cron_cmd=$(build_cron "${QDISC_CRON_CMD}" "*" "${QDISC_TIME_INTERVAL}")
+		add_to_cron "${cron_cmd}"
+	}
+}
+
+stop() {
+	remove_from_cron "${QDISC_CRON_CMD}"
+	echo -n "Uninstalling qos-scripts... "
+	errlog=$(qos_onstop 2>&1)
+	retval=$?
+	if [ $retval -eq 0 ]; then
+		echo "[ OK ]"
+	else
+		echo "[ FAIL ]"
+		sb_logger "${errlog}"
+	fi
+	default_stop "$@"
+}
+
+boot() {
+	for module in ${KERNEL_MODULES}; do
+		echo -n "${SERVICE}: installing module ${module}... "
+		lsmod | grep ${module} &>/dev/null && {
+			echo "[ OK ]"
+			continue
+		}
+		[ ! -e /lib/modules/$(uname -r)/${module}.ko ] && {
+			echo "[ SKIP ]"
+			sb_logger "WARN: module ${module} is missing! Assuming built-in."
+			continue
+		}
+		insmod_ko ${module} &>/dev/null
+		retval=$?
+		[ $retval -eq 0 ] && echo "[ OK ]" || echo "[ FAIL ]"
+	done
+	start "$@"
+}
+
+shutdown() {
+	stop "$@"
+	for module in $(echo ${KERNEL_MODULES} | sed 's/ /\n/g' | sort -r ); do
+		echo -n "${SERVICE}: uninstalling module ${module}..."
+		rmmod ${module} &>/dev/null
+		retval=$?
+		[ $retval -eq 0 ] && echo "[ OK ]" || echo "[ FAIL ]"
+	done
+}
+
+sync_qdiscs() {
+	. ${STREAMBOOST_CFGDIR}/qos_constants.sh
+	local ifnames="$(print_interface_device lan) $(print_interface_device wan)"
+	local dirnames="down up"
+	local classid_classified=$(printf %x 0x$CLASSID_CLASSIFIED)
+	local leak_count=0
+	local i=0
+	for ifname in $ifnames; do
+		eval classes_${i}=\"$(tc class show dev $ifname |
+			sed -n -e 's/^class hfsc '$SB_HNDL_MAJ':\([^ ]*\) parent '$SB_HNDL_MAJ':'$classid_classified' leaf .*/\1/p' \
+			       -e 's/^class nssbf '$SB_HNDL_MAJ':\([^ ]*\) root leaf .*/\1/p'
+			)\"
+		# output variants for tc classes:
+		# [AP135] class hfsc 1:c70 parent 1:fff0 leaf c70: rt m1 0bit d 0us m2 240000bit ls m1 0bit d 0us m2 16000bit
+		# [AP148] class nssbf 1:3c90 root leaf 3c90: burst 1514b rate 64bit quantum 2000b mtu 1514b
+		# [localhost traffic] class fq_codel fff1:1b7 parent fff1:
+		let i++
+	done
+
+	local flows=$(nxcli -q GETFLOW | cut -d ';' -f 4 | xargs -r printf '%x ')0
+	# output sample for GETFLOW:
+	# 0;nxstat;GETFLOW;24955;youtube;00:03:7F:48:CE:EE;3810;16470;57;58;1481015132;PRIO3;+realtimestream;streaming;down;100000,10000,1500;100000,10000,1500;100000,10000,1500
+
+	i=0
+	for direction in $dirnames; do
+		for f in $(eval echo \$classes_${i} | sed 's/\b'"$(echo $flows | sed 's/ /\\b\\|\\b/g')"'\b//g'); do
+			flow=$(printf '%d' 0x$f)
+			[ $flow -ge $FLOW_ID_MIN -a $flow -le $FLOW_ID_MAX ] && {
+				nxcli -m "$flow;$direction;delete" -c oversub
+				let leak_count++
+			}
+		done
+		let i++
+	done
+
+	[ $leak_count -gt 0 ] && sb_logger "Leaked qdiscs: $leak_count cleaned up"
+}
+
+#
+# MAIN
+#
+case "${1}" in
+	start_qdiscs)
+		start_qdiscs
+	;;
+	stop_qdiscs)
+		stop_qdiscs
+	;;
+	setup_iptables)
+		setup_iptables
+	;;
+	teardown_iptables)
+		teardown_iptables
+	;;
+	sync_qdiscs)
+		sync_qdiscs
+	;;
+	*)
+		action "$@"
+esac

@@ -1,0 +1,23 @@
+#!/bin/sh
+
+# This script should be run at least once per flashed image, in order to restore
+# the StreamBoost3 enabled setting from the previous image (if available).
+# Running it once at every boot is also fine. More than once per reboot cycle
+# will cause undesired side effects (race conditions that override StreamBoost3
+# to enabled when the user is trying to disable it).
+
+fix_sb3_state() {
+	[ "$(streamboost3 get system.enabled)" = "true" ] && {
+		streamboost3 enable
+		streamboost3 boot
+	}
+}
+
+case "${1:-boot}" in
+	boot|init|start)
+		fix_sb3_state
+		;;
+esac
+
+# always return success, so that the script can be removed from uci-defaults
+true

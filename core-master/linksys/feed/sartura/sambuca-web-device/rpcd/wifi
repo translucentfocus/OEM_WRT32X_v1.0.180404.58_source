@@ -1,0 +1,37 @@
+#!/bin/sh
+
+case "$1" in
+	list)
+		echo '{ "set":{}, "commit": {}, "restart": {} }'
+	;;
+	call)
+		case "$2" in
+			set)
+				read input
+
+				call_config="$(echo "$input" | jsonfilter -e '@.config')"
+				call_section="$(echo "$input" | jsonfilter -e '@.section')"
+				call_values="$(echo "$input" | jsonfilter -e '@.values' | sed 's/": /=/g; s/ "/ /g; s/\"//g; s/[{}]//g')"
+
+				IFS=$,
+				for x in $call_values; do
+					# Remove trailing spaces
+					x="$(echo $x | sed 's/ //; s/ *$//')"
+					$(uci set $call_config.$call_section.$x)
+				done
+
+				$(uci commit wireless)
+
+				printf '{ "values": { "status":"ok" }}'
+			;;
+			commit)
+				$(uci commit wireless)
+				printf '{ "values": { "status":"ok" }}'
+			;;
+			restart)
+				$(wifi)
+				printf '{ "values": { "status":"ok" }}'
+			;;
+		esac
+	;;
+esac

@@ -1,0 +1,7 @@
+config linksys
+	option venom 1
+
+config firmware
+
+config hardware
+	option hw_mac_addr fe:ed:00:c0:ff:33

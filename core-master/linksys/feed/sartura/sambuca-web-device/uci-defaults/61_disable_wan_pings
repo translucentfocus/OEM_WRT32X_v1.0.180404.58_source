@@ -1,0 +1,17 @@
+#!/bin/sh
+
+firstboot=$(uci get linksys.@firmware[0].eula_accepted)
+
+if [ "$firstboot" != "1" ]; then
+	get_section=$(uci -q show firewall | grep -w 'Allow-Ping' | cut -d '.' -f1,2 | head -1)
+
+	if [ ! -z "$get_section" ]; then
+		uci set $get_section.target='DROP'
+		uci commit firewall
+		/etc/init.d/firewall restart
+	fi
+fi
+
+chmod +x /etc/init.d/firewall
+
+exit 0

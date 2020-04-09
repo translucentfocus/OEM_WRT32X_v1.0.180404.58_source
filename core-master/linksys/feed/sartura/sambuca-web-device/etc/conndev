@@ -1,0 +1,124 @@
+#!/bin/sh
+
+[[ -f /tmp/neighlist ]] && rm /tmp/neighlist
+
+ip -4 neigh show | grep br-lan > /tmp/arplist
+
+create_device(){
+	local IPADDR=$1
+	local MAC=$2
+	local HOSTNAME
+
+	local IDX=$3
+	# check into dhcp leases if the dhcp was able to resolve name
+	while read DHCPLIST
+	do
+		# MAC matches the one from the dhcp list, check for the hostname
+		if [ $(echo "$DHCPLIST" | awk '{print $2}') == "$MAC" ]; then
+			DEVICE_HOSTNAME=$(echo "$DHCPLIST" | awk '{print $4}')
+			if [ "$DEVICE_HOSTNAME" != "*" ] || [ "$DEVICE_HOSTNAME" == "" ]; then
+				HOSTNAME=$DEVICE_HOSTNAME
+			else
+				if [ "$(uci -q get krouter.krouter.xbox_macaddr | grep -o $MAC)" ];then
+					HOSTNAME="Xbox_|_360"
+				else
+					HOSTNAME="unknown.device.detected"
+				fi
+			fi
+		fi
+	done < /tmp/dhcp.leases
+
+	# If /tmp/dhcp.leases is empty
+	if [ "$DEVICE_HOSTNAME" == "" ]; then
+		HOSTNAME="unknown.device.detected"
+	fi
+
+	# determine if the device is connected to wifi and which one
+	local NETWORK="wired"
+	# convert MAC to upper first because of iwinfo
+	local found=0;
+	WIFI_MAC=$(iwpriv wdev0 getstalistext | grep $MAC | awk '{print $6}')
+	while true; do
+		if [ "$WIFI_MAC" == "" ]; then
+			break
+		elif [ "$WIFI_MAC" == "$MAC" ]; then
+			NETWORK="5GHz"
+			found=1
+			break
+		fi
+
+		WIFI_MAC=$(iwpriv wdev0ap0 getstalistext | grep $MAC | awk '{print $6}')
+	done
+
+	if [ $found == 0 ]; then
+		WIFI_MAC=$(iwpriv wdev1 getstalistext | grep $MAC | awk '{print $6}')
+		while true; do
+			if [ "$WIFI_MAC" == "" ]; then
+				break
+			elif [ "$WIFI_MAC" == "$MAC" ]; then
+				NETWORK="2.4GHz"
+				break
+			fi
+
+			WIFI_MAC=$(iwpriv wdev1 getstalistext | grep $MAC | awk '{print $6}')
+		done
+	fi
+
+	if [ $found == 0 ]; then
+                WIFI_MAC=$(iwpriv wdev0ap1 getstalistext | grep $MAC | awk '{print $6}')
+                while true; do
+                        if [ "$WIFI_MAC" == "" ]; then
+                                break
+                        elif [ "$WIFI_MAC" == "$MAC" ]; then
+                                NETWORK="5GHz-guest"
+                                break
+                        fi
+
+                        WIFI_MAC=$(iwpriv wdev0ap1 getstalistext | grep $MAC | awk '{print $6}')
+                done
+        fi
+
+        if [ $found == 0 ]; then
+                WIFI_MAC=$(iwpriv wdev1ap1 getstalistext | grep $MAC | awk '{print $6}')
+                while true; do
+                        if [ "$WIFI_MAC" == "" ]; then
+                                break
+                        elif [ "$WIFI_MAC" == "$MAC" ]; then
+                                NETWORK="2.4GHz-guest"
+                                break
+                        fi
+
+                        WIFI_MAC=$(iwpriv wdev1ap1 getstalistext | grep $MAC | awk '{print $6}')
+                done
+        fi
+
+
+	echo $HOSTNAME.$IDX $IPADDR $MAC $NETWORK >> /tmp/neighlist
+}
+
+n=0
+while read ARPLIST
+do
+	IPADDR=$(echo "$ARPLIST" | awk '{print $1}')
+	IFACE=$(echo "$ARPLIST" | awk '{print $3}')
+	MAC=$(echo "$ARPLIST" | awk '{print $5}')
+	STATE=$(echo "$ARPLIST" | awk '{print $6}')
+
+	if [ "$STATE" == "REACHABLE" ]; then
+		create_device $IPADDR $MAC $n
+	elif [ "$STATE" == "" ]; then
+		continue
+	else
+		# at this point, device can be STALE or DELAY. It takes the kernel some time to resolve if device is still
+		# reachable or failed. Try to ping it to see if it will respond rather then wait for the kernel to decide
+		if `(ping -c 1 -w 3 -I $IFACE $IPADDR &> /dev/null &)` || `(arping -f -c 1 -w 3 -I $IFACE $IPADDR &> /dev/null &)`; then
+			create_device $IPADDR $MAC $
+		else
+			# no repsonse, ignore the entry
+			continue
+		fi
+	fi
+
+	# avoid overriding duplicating entries in ubus responses with a counter
+	let n=n+1
+done < /tmp/arplist

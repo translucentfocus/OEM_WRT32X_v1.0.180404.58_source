@@ -1,0 +1,97 @@
+#!/bin/sh
+
+echo "Content-type: text/plain"
+echo ""
+
+echo -n "page generated on"
+date
+echo ""
+echo "Uptime:"
+uptime
+echo ""
+echo -n "Firmware version: "
+uci get linksys.@firmware[0].version
+echo -n "Firmware builddate: "
+cat /proc/version |cut -d " " -f 15-
+echo ""
+echo -n "Linux:"
+cat /proc/version
+echo ""
+echo "-----U-Boot Data-----"
+fw_printenv
+echo ""
+echo "-----Boot Data-----"
+
+cat /proc/cmdline
+cat /proc/mtd
+echo ""
+echo "-----Devinfo-----"
+strings /dev/mtd3
+
+echo ""
+echo -n "WAN IP address: "
+ifconfig eth0|grep "inet "|cut -d: -f2|cut -d " " -f1
+
+echo ""
+echo "-----MAC addresses-----"
+echo -n "LAN MAC address: "
+cat /sys/class/net/eth1/address
+echo -n "WAN MAC address: "
+cat /sys/class/net/eth0/address
+echo -n "5GHz MAC address: "
+cat /sys/class/net/wdev0/address
+echo -n "2.4GHz MAC address: "
+cat /sys/class/net/wdev1/address
+
+echo ""
+echo "----Filesystems----"
+mount
+
+echo ""
+echo "----Killer Engine settings----"
+uci show krouter
+
+echo ""
+echo "----WiFi-----"
+echo ""
+echo "wdev0"
+iwpriv wdev0 version
+iwconfig wdev0ap0
+iwconfig wdev0ap1
+iwpriv wdev0 gethtbw
+iwpriv wdev0 getwpawpa2mode
+iwpriv wdev0 getopmode
+iwpriv wdev0 getstalistext
+hostapd_cli -i wdev0ap0 wps_get_status
+echo "wdev1"
+iwconfig wdev1ap0
+iwconfig wdev1ap1
+iwpriv wdev1 gethtbw
+iwpriv wdev1 getwpawpa2mode
+iwpriv wdev1 getopmode
+iwpriv wdev1 getstalistext
+hostapd_cli -i wdev1ap0 wps_get_status
+echo "settings"
+echo "wdev0"
+iwpriv wdev0 -a
+echo "wdev1"
+iwpriv wdev1 -a
+
+echo ""
+echo "-----Region codes-----"
+iwpriv wdev1 getregioncode
+iwpriv wdev0 getregioncode
+strings /dev/mtd3|grep cert_region
+
+echo ""
+echo "-----DHCP Client table-----"
+cat /tmp/dhcp.leases
+
+echo ""
+echo "-----Network Info-----"
+brctl show
+ifconfig
+
+echo ""
+echo "-----Logs----"
+logread

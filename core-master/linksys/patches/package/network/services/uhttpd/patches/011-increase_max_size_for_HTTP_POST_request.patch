@@ -1,0 +1,14 @@
+Index: uhttpd-2016-10-05/ubus.c
+===================================================================
+--- uhttpd-2016-10-05.orig/ubus.c
++++ uhttpd-2016-10-05/ubus.c
+@@ -34,7 +34,7 @@ static struct config *_conf;
+ static struct ubus_context *ctx;
+ static struct blob_buf buf;
+ 
+-#define UH_UBUS_MAX_POST_SIZE	4096
++#define UH_UBUS_MAX_POST_SIZE	20480
+ #define UH_UBUS_DEFAULT_SID	"00000000000000000000000000000000"
+ 
+ enum {
+

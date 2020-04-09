@@ -1,0 +1,23 @@
+#!/bin/sh
+
+# Create default sysupgrade cron rule for checking the updates (at midnight)
+if [ ! "$(cat /etc/crontabs/root | grep -w "fwupdate" | grep -wo "check")" ]; then
+	echo "0 0 * * * ubus call fwupdate check" >> /etc/crontabs/root
+fi
+
+# Remove any existing rules from sysupgrades
+sed -i '/fwupdate update/d' /etc/crontabs/root
+
+# Disable wizupgrade option
+if [ "$(uci -q get sambuca.sambuca.wizupgrade)" ]; then
+	uci set sambuca.sambuca.wizupgrade='0'
+	uci commit sambuca
+fi
+
+# Remove leftover files
+[ -f "/tmp/wizupgrade" ] && rm /tmp/wizupgrade
+
+# Remove any remaining ntpd cronjobs
+[ ! -z "$(grep -w "ntpd update" /etc/crontabs/root)" ] && sed -i '/ntpd update/d' /etc/crontabs/root
+
+exit 0

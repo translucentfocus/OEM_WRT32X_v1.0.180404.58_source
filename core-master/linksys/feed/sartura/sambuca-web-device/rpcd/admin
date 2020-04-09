@@ -1,0 +1,24 @@
+#!/bin/sh
+
+case "$1" in
+	list)
+		echo '{ "session": {}}'
+	;;
+	call)
+		case "$2" in
+			session)
+				read input
+				session_id="$(echo $input | jsonfilter -e '@.ubus_rpc_session')"
+				session_list="$(ubus call session list | grep ubus_rpc_session | sed 's|[ ",]||g' | cut -d ':' -f2 | sed '1 d')"
+
+				for x in $session_list; do
+					if [ "$x" != "$session_id" ]; then
+						$(ubus call session destroy "{'ubus_rpc_session': '$x' }")
+					fi
+				done
+
+				printf '{ "values": { "session":"%s" }}', $session_id
+			;;
+		esac
+	;;
+esac

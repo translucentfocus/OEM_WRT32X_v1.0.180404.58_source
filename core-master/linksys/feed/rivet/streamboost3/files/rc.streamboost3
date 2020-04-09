@@ -1,0 +1,575 @@
+#!/bin/sh
+# Common stuff for streamboost3 pipeline stages
+
+# SERVICE must be defined before continuing to source the rest of the script
+if [ -z "${SERVICE}" ]; then
+	echo "SERVICE must be defined!"
+	echo "This must be the name of the init script!"
+	exit 1
+fi
+
+# Source platform-specific functions
+. ${STREAMBOOST_CFGDIR:=/etc/streamboost3}/platform.sh
+
+# make system configuration overridable for easier debugging on read-only platforms
+STREAMBOOST_SYS_CFG=${STREAMBOOST_SYS_CFG:-"${STREAMBOOST_RUNDIR:-/var/run/streamboost3}/streamboost3.sys.conf"}
+STREAMBOOST_SYS_DEFAULTS=${STREAMBOOST_SYS_DEFAULTS:-"${STREAMBOOST_CFGDIR:-/etc/streamboost3}/streamboost3.sys.conf"}
+
+INITDIR=${INITDIR:-"/etc/streamboost3/init.d"}
+RCDIR=${RCDIR:-"/etc/streamboost3/rc.d"}
+PERSISTFILE=${PERSISTFILE:-"${STREAMBOOST_CFGDIR:-/etc/streamboost3}/streamboost.persist"}
+PERSISTSWAPFILE="$PERSISTFILE.swap"
+
+# Set DEBUG=1 to log all messages to stderr in addition to logread, and to
+# enable additional messages.
+# Set DEBUGFILE to any valid file path to also append the messages to a file.
+#
+# DEBUG=1
+# DEBUGFILE=$(dirname $STREAMBOOST_SYS_CFG)/sb3_messages.log
+sb_logger() {
+	logger -t "${SERVICE}" "[$$] ${@}"
+	[ "$DEBUG" = 1 ] && {
+		local msg='***DBG '$(date +%H%M%S) $$'*** ' "$@"
+		echo >&2 "$msg"
+		[ -n "$DEBUGFILE" ] && echo 2>/dev/null >>"$DEBUGFILE" "$msg"
+	}
+}
+
+sb_logger_debug() {
+	[ "$DEBUG" = 1 ] && sb_logger "$@"
+}
+
+###############################################################################
+
+[ -f $STREAMBOOST_SYS_CFG ] || {
+	mkdir -p $(dirname $STREAMBOOST_SYS_CFG)
+	sed "s/%UBUS_LAN_DEV%/$(print_interface_device lan)/" <$STREAMBOOST_SYS_DEFAULTS | \
+	sed "s/%UBUS_WAN_DEV%/$(print_interface_device wan)/" >$STREAMBOOST_SYS_CFG
+}
+. $STREAMBOOST_SYS_DEFAULTS
+. $STREAMBOOST_SYS_CFG
+
+BINARY=${BINARY:-${BINDIR}/${SERVICE}}
+PIDFILE="${RUNDIR}/${SERVICE}.pid"
+
+# This must be done AFTER sourcing $STREAMBOOST_SYS_CFG, or RUNDIR won't be defined
+STREAMBOOST_USER_CFG=${STREAMBOOST_USER_CFG:-"$RUNDIR/streamboost3.user.conf"}
+
+
+# override these in each daemon's init script as needed
+# values for overrides may be set before or after sourcing this script
+DEFAULT_ACTION=${DEFAULT_ACTION:-status}
+RELOAD_SENDS_HUP=${RELOAD_SENDS_HUP:-no}
+# also needed for default action implementations: BINARY
+
+check_for_zombies() {
+	local PID=$1
+	if [ grep "^State:.*Z" /proc/$PID/status >/dev/null 2>&1 ]; then
+		return 2
+	fi
+	return 0
+}
+
+# If the service is running or enabled then report it's status, otherwise
+# report nothing unless --verbose is provided.
+default_status() {
+	local state=1 enabled=0
+	# Check if the service is running or not first
+	if [ -r "$PIDFILE" ]; then
+		PID=$(cat $PIDFILE 2>/dev/null)
+		if [ -e /proc/$PID/maps ]; then
+			state=0
+			check_for_zombies $PID || {
+				state=2
+			}
+		else
+			state=3
+		fi
+	fi
+	# Check if the the service is enabled or not
+	enabled 1>/dev/null && {
+		enabled=1
+	}
+
+	# return if the --verbose flag was not set and disabled and not running
+	if [ -z "$VERBOSE" -a $enabled = 0 -a ! $state = 0 ]; then
+		return 0
+	fi
+
+	# If the verbose flag is set then echo our enabled state
+	if [ "$VERBOSE" = "yes" ]; then
+		[ $enabled = 0 ] && echo -n "[ DISABLED ]" || echo -n "[ ENABLED ]"
+	fi
+
+	# ehco our current state
+	if [ $state = 0 ]; then
+		echo "[  UP  ] ${SERVICE} (pid ${PID}) is running."
+	elif [ $state = 2 ]; then
+		echo "[ DOWN ] ${SERVICE} (pid ${PID}) is a zombie."
+	elif [ $state = 3 ]; then
+		echo "[ DOWN ] ${SERVICE} (pid ${PID}) is not running."
+	else
+		echo "[ DOWN ] ${SERVICE} is down."
+	fi
+	return $state
+}
+status() {
+	default_status
+}
+
+restart() {
+	stop "$@"
+	start "$@"
+}
+
+send_signal() {
+	SIGNUM=${1:-HUP}
+	[ -r "$PIDFILE" -a -e /proc/$(cat $PIDFILE 2>/dev/null) ] && start-stop-daemon -K -q -s $SIGNUM -p $PIDFILE
+}
+
+reload() {
+	if [ "$RELOAD_SENDS_HUP" == "no" ]; then
+		restart
+	else
+		send_signal HUP
+	fi
+}
+
+boot() {
+	start "$@"
+}
+
+init() {
+	boot "$@"
+}
+
+default_info_disk() {
+	local PKGNAME="${PKGNAME:-${SERVICE}}"
+	# first, find the service with opkg
+	local pkg=$(opkg find ${PKGNAME} 2>/dev/null)
+
+	# if the service was installed with opkg then get the total file size
+	local size="Unavailable"
+	if [ ! -z "$pkg" ]; then
+		local files=$(opkg files ${PKGNAME} | tail -n+2)
+		size="$(du -ch $files 2>/dev/null | tail -n 1 | sed 's/\([^0-9|.][a-zA-Z]\+\)//g')"
+	fi
+
+	echo "    Total Disk Size   : $size"
+}
+
+default_info_memory() {
+	# get memory current memory and cpu consumption
+	local memory="Unavailable"
+	if [ -r $PIDFILE ]; then
+		local PID=$(cat $PIDFILE 2>/dev/null)
+		if [ -e /proc/$PID/status ]; then
+			memory="$(grep "VmSize" /proc/$PID/status | sed 's/.* \([0-9]\+\)/\1/g')"
+		fi
+	fi
+	echo "    Current Memory    : $memory"
+
+	# extra verbose information
+	if [ ! "${VERBOSE}" = "yes" ]; then
+		return 0
+	fi
+
+	local peak="Unavailable"
+	local data="Unavailable"
+	local stack="Unavailable"
+	if [ -r $PIDFILE ]; then
+		if [ -e /proc/$PID/status ]; then
+			peak="$(grep "VmPeak" /proc/$PID/status | sed 's/.* \([0-9]\+\)/\1/g')"
+			data="$(grep "VmData" /proc/$PID/status | sed 's/.* \([0-9]\+\)/\1/g')"
+			stack="$(grep "VmStk" /proc/$PID/status | sed 's/.* \([0-9]\+\)/\1/g')"
+		fi
+	fi
+	echo "      Peak Memory     : $peak"
+	echo "      Data Memory     : $data"
+	echo "      Stack Memory    : $stack"
+
+}
+
+default_info_cpu() {
+	# get current cpu usage
+	local cpu="Unavailable"
+	if [ -r $PIDFILE ]; then
+		local PID=$(cat $PIDFILE 2>/dev/null)
+		local stats=$(top -b -n 1 | grep "^[ ]*${PID} " | grep -v grep)
+		cpu="$(echo $stats | awk '{print $7}')"
+	fi
+	echo "    Current CPU       : $cpu"
+}
+
+info() {
+	echo "${SERVICE} default info"
+	default_info_disk "$@"
+	default_info_memory "$@"
+	default_info_cpu "$@"
+}
+
+default_start() {
+	cmd="start-stop-daemon -S -q -p $PIDFILE -x $BINARY -- $OPTIONS_RUN $@"
+	[ "${VERBOSE}" = "yes" ] && {
+		echo "${cmd}"
+	}
+	echo -n "Starting ${SERVICE}... "
+	status >/dev/null 2>&1 && {
+		echo "[ OK ]"
+		sb_logger "${SERVICE} already running!"
+		return 0
+	}
+
+	[ ! -f ${BINARY} -o ! -x ${BINARY} ] && {
+		echo "[ FAIL ]"
+		sb_logger "${SERVICE} not found or executable: ${BINARY}!"
+		return 1
+	}
+	${cmd}
+	retval=$?
+	[ $retval -eq 0 ] && echo "[  OK  ]" || echo "[ FAIL ]"
+	return $retval
+}
+start() {
+	default_start "$@"
+}
+
+default_stop() {
+	echo -n "Stopping ${SERVICE}... "
+	local PID=$(cat "$PIDFILE" 2>/dev/null)
+	if [ -n "$PID" ]; then
+		if [ -f /proc/$PID/maps ]; then
+			if [ -z "${SB3_CLEAN_EXIT}" ]; then
+				local count=0
+				local maxcount=${STOP_MAXCOUNT:-4}
+				start-stop-daemon -K -q -p $PIDFILE
+				while [ -f /proc/$PID/maps ]; do
+					sleep 1
+					let count++
+					[ "$count" -gt $maxcount ] && start-stop-daemon -K -q -s KILL -p $PIDFILE
+				done
+				true
+			else
+				start-stop-daemon -K -q -p $PIDFILE
+			fi
+		else
+			true
+		fi
+		retval=$?
+		if [ $retval -eq 0 ]; then
+			echo "[  OK  ]"
+			rm -f $PIDFILE
+		else
+			echo "[ FAIL ]"
+		fi
+		return $retval
+	else
+		echo "[ OK ]"
+		sb_logger_debug "PID file $PIDFILE does not exist!"
+	fi
+}
+stop() {
+	default_stop
+}
+shutdown() {
+	stop "$@"
+}
+
+update() {
+	sb_logger_debug "streamboost update; $@"
+	local CA_CERT="${SSL_DIR}/certs/CA.cert.pem"
+	local CERT="${SSL_DIR}/certs/client_cert.pem"
+	local KEY="${SSL_DIR}/private/client_key.pem"
+	local UPDATE_FILE="streamboost3-data.ipk"
+	local UPDATE_URL="https://${UPDATE_HOST}/${UPDATE_FILE}"
+	echo -n "Downloading ${UPDATE_URL} ..."
+	curl -s --cacert ${CA_CERT} --cert ${CERT} --key ${KEY} ${UPDATE_URL} > /tmp/${UPDATE_FILE}
+	RESULT=$?
+	if [ $RESULT -ne 0 ]; then
+		echo "[ FAIL ]"
+		sb_logger "Could not download update files."
+		return $RESULT
+	fi
+	which opkg >/dev/null 2>&1
+	RESULT=$?
+	if [ $RESULT -ne 0 ]; then
+		echo "[ FAIL ]"
+		sb_logger "opkg tool not found."
+		return $RESULT
+	fi
+	opkg --force-overwrite install /tmp/${UPDATE_FILE}
+	RESULT=$?
+	if [ $RESULT -ne 0 ]; then
+		echo "[ FAIL ]"
+		sb_logger "opkg did not install new streamboost3 data."
+		return $RESULT
+	fi
+	local SB3_DATA_VERSION=$(opkg info streamboost3-data | grep Version)
+	echo "[  OK  ]"
+	sb_logger_debug "streamboost3-data now at ${SB3_DATA_VERSION}"
+	rm -f /tmp/${UPDATE_FILE}
+	return 0
+}
+
+upload() {
+	return 0
+}
+
+# The enabled function checks to see if a service is located in the rc.d
+# directory and prints whether or not it's currently enabled.
+# Having either a START or STOP link will print ENABLED, otherwise DISABLED.
+enabled() {
+	local is_enabled=0
+	if [ ! -z "$START" -a -f "${RCDIR}/S${START}${SERVICE}" ]; then
+		is_enabled=1
+	fi
+	if [ ! -z "$STOP" -a -f "${RCDIR}/K${STOP}${SERVICE}" ]; then
+		is_enabled=1
+	fi
+	if [ $is_enabled -eq 1 ]; then
+		echo "[ ENABLED ] ${SERVICE}"
+		return 0
+	else
+		echo "[ DISABLED ] ${SERVICE}"
+		return 1
+	fi
+}
+
+enable_start() {
+	if [ -z "$START" ]; then
+		return 0
+	fi
+	ln -s "${INITDIR}/${SERVICE}" "${RCDIR}/S${START}${SERVICE}" 2>/dev/null
+	retval=$?
+	[ ! -f "${RCDIR}/S${START}${SERVICE}" ] && {
+		sb_logger "Failed to link ${SERVICE} to ${RCDIR}/S${START}${SERVICE}"
+		return $retval
+	}
+	return 0
+}
+
+enable_stop() {
+	if [ -z "$STOP" ]; then
+		return 0
+	fi
+	ln -s "${INITDIR}/${SERVICE}" "${RCDIR}/K${STOP}${SERVICE}" 2>/dev/null
+	retval=$?
+	[ ! -f "${RCDIR}/K${STOP}${SERVICE}" ] && {
+		sb_logger "Failed to link ${SERVICE} to ${RCDIR}/K${STOP}${SERVICE}"
+		return $retval
+	}
+	return 0
+}
+
+default_enable() {
+	echo -n "Enabling ${SERVICE}... "
+	enable_start || {
+		echo "[ FAIL ]"
+		return 1
+	}
+	enable_stop || {
+		echo "[ FAIL ]"
+		return 1
+	}
+	echo "[ OK ]"
+}
+default_enable_premium() {
+	is_premium_mode && default_enable
+}
+enable() {
+	default_enable "$@"
+}
+
+default_disable() {
+	echo -n "Disabling ${SERVICE}... "
+	rm -f ${RCDIR}/[SK]??${SERVICE} 2>/dev/null
+	[ -f ${RCDIR}/K??${SERVICE} -o -f ${RCDIR}/S??${SERVICE} ] && {
+		echo "[ FAIL ]"
+		sb_logger "Failed to disable ${SERVICE}!"
+		return 1
+	}
+	echo "[ OK ]"
+}
+disable() {
+	default_disable "$@"
+}
+
+action() {
+	local action=${1:-$DEFAULT_ACTION}
+	local retval=0
+	# this shift is required because the start() function accepts
+	# parameters from the command line and passes them through to the
+	# daemon
+	shift
+
+	case "${action}" in
+		boot|init)
+			boot "$@"
+			retval=$?
+		;;
+		status|enabled|info)
+			${action} "$@"
+			retval=$?
+		;;
+		start|stop|restart|reload|shutdown|enable|disable|upload)
+			${action} "$@"
+			retval=$?
+			if [ ! $retval -eq 0 ]; then
+				sb_logger "Error: ${SERVICE} $action returned $retval"
+			fi
+		;;
+		*)
+			echo "Usage: $0 {start|stop|restart|reload|boot|init|shutdown|status|disable|enable|enabled|upload|info}"
+			exit 3
+	esac
+	return $retval
+}
+
+# Get the last bytes of the mac address to use as a
+# seed for checking the update site.
+get_seed() {
+	awk 'BEGIN {srand(); printf("%d\n", rand()*240)}'
+}
+
+# Build a valid crontab line that we can append to the crontab
+# The first argument is required and is expected to be the command
+# to be added to the crontab. The second and third argument
+# correspond to the hour and minute respectively; they are optional.
+# If not specified then the hour and minute are randomized.
+build_cron() {
+	local command=$1
+
+	local seed=$(get_seed)
+
+	local hour=${2:-$(expr ${seed} % 24)}
+	local minute=${3:-$(expr ${seed} % 60)}
+
+	echo " ${minute} ${hour}  *   *   *     ${command}"
+}
+
+# Finds a cmomand in the crontab
+find_in_cron() {
+	crontab -l 2>/dev/null | grep -qF "$1"
+}
+
+# adds a cron entry
+# note: this function is idempotent
+# $1: the full text to add to the crontab, e.g., "0 * * * * echo hello"
+add_to_cron() {
+	find_in_cron "$1"
+	if [ "$?" = "1" ]; then
+		(crontab -l 2>/dev/null; echo "$1") | crontab -
+	fi
+}
+
+# Remove the command from the contab
+remove_from_cron() {
+	if echo "$1" | grep >/dev/null ','; then
+		sb_logger "ERROR: delimiter clash in cron command: $1"
+	else
+		crontab -l 2>/dev/null | sed 's,.*'"${1}"'.*,,g' | sed '/^$/d' | crontab -
+	fi
+}
+
+# creates CIDR notation given an ip address and netmask
+# $1: IP Address
+# $2: Netmask
+ipaddr_netmask_to_cidr() {
+	local addr=$1
+	local mask=$2
+	local pre=$(awk -v "NMSK=${mask}" 'BEGIN {bits=8; for (i = 255; i >= 0; i -= 2^i++) cidr[i] = bits--; split(NMSK, arr, "[.]"); for (i = 1; i <= 4; i++) {total += cidr[arr[i]]; if (arr[i] < 255) break} print total}')
+	local net=$({ echo "${addr}"; echo "${mask}"; } | { IFS=. read A B C D; IFS=. read N1 N2 N3 N4; echo $(($A & $N1)).$(($B & $N2)).$(($C& $N3)).$(($D & $N4)); })
+	echo "${net}/${pre}"
+}
+
+# tests whether the NSS QDisc package is installed
+nss_qdisc_is_installed() {
+	# check to see if the nss package is available. If not then
+	# don't bother checking if the hardware is available also
+	opkg list | grep 'kmod-qca-nss-.*qdisc' >/dev/null 2>&1
+	[ $? -eq 0 ] || return 1;
+
+	# check to see if the kernel module has already been loaded
+	lsmod | grep 'qca_nss_qdisc' >/dev/null 2>&1
+	[ $? -eq 0 ] || return 1;
+
+	# package is available but also make sure the hardware is
+	# there to support. For kernels that support the device-tree
+	# the proc fs layout may be available.
+	[ -d /proc/device-tree ] && {
+		[ -d /proc/device-tree/nss-common ] || return 1;
+	}
+
+	return 0;
+}
+
+# returns whether components should utilize NSS.  If NSS is installed, it is
+# not used unless use-nss is explicitly set to true/1 in the persist file.
+use_nss() {
+	if nss_qdisc_is_installed; then
+		local user_set=$(streamboost3 get system.use-nss)
+		if [ "$?" = "0" ]; then
+			if [ "$user_set" = "true" -o "$user_set" = "1" ]; then
+				#user setting explicitly enables nss
+				return 0
+			else
+				#use-nss has been set, but not to true
+				return 1
+			fi
+		else
+			#use-nss has not been set by the user
+			return 1
+		fi
+	else
+		#nss is not installed
+		return 1
+	fi
+}
+
+# remove all connection marks from conntrack.
+#
+# the issue this solves is that during a streamboost3 restart, connections
+# maintain their existing marks.  for non-offloaded traffic this is
+# recoverable because streamboost3 immediately remarks everything, but for
+# offloaded traffic that spans the restart, streamboost3 won't be able to see
+# it for remarking, thus leaving some connections out of sync with the current
+# streamboost3 qdisc/flow state.
+clear_conmarks() {
+	sb_logger_debug "flushing conntrack"
+	echo f > /proc/net/nf_conntrack
+}
+
+
+is_nexus_installed() {
+	local BINARY="nexus"
+	#check for nexus running
+	lsmod | grep "${BINARY}" >/dev/null 2>&1
+}
+
+is_sbfc_installed() {
+	local BINARY="sbfc"
+	#check for sbfc running
+	lsmod | grep "${BINARY}" >/dev/null 2>&1
+}
+
+is_sbsb_installed() {
+	local BINARY="sbsb"
+	#check for sbsb running
+	lsmod | grep "${BINARY}" >/dev/null 2>&1
+}
+
+# calls insmod on the $1 argument using the full modules path
+# $1: module name, without .ko extension
+# $2: module parameters
+insmod_ko() {
+	local modname=$1
+	shift
+	insmod /lib/modules/$(uname -r)/${modname}.ko "$@"
+}
+
+is_premium_mode() {
+	local mode=$(streamboost3 get system.mode)
+	# valid values are "premium" and "basic"
+	# we default to BASIC mode if nothing is set
+	[ "${mode}" == "premium" ]
+}

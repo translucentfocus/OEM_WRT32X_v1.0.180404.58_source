@@ -1,0 +1,19 @@
+#!/bin/sh
+
+if [ "$REQUEST_METHOD" == "POST" ]; then
+        # temporary file for the uploaded content
+        cat - > /tmp/uploadedfirmware.tar.1
+
+        # Get the line count
+        LINES=$(wc -l /tmp/uploadedfirmware.tar.1 | cut -d ' ' -f 1)
+
+        # remove all of the uncessary lines
+        tail -$((LINES - 4)) /tmp/uploadedfirmware.tar.1 > /tmp/uploadedfirmware.tar.2
+        FILESIZE=$(wc -c /tmp/uploadedfirmware.tar.2 | awk '{print $1}')
+        dd if=/tmp/uploadedfirmware.tar.2 of=/tmp/uploadedfirmware.tar bs=1 count=$((FILESIZE - 46))
+
+        # echo the response back for browser
+        echo "Status: 204 No Content"
+        echo
+fi
+

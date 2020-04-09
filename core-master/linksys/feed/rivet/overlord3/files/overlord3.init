@@ -1,0 +1,27 @@
+#!/bin/sh
+
+#
+# Required config
+#
+SERVICE="overlord3"
+
+. ${STREAMBOOST_CFGDIR:=/etc/streamboost3}/rc.streamboost3
+
+START=80
+STOP=30
+
+#
+# Overlord config
+#
+
+# Format the command line parameters
+OPTIONS_RUN="\
+--daemon \
+-p ${PIDFILE} \
+"
+
+enable() {
+	default_enable_premium "$@"
+}
+
+action "$@"

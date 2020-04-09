@@ -1,0 +1,97 @@
+--- a/drivers/net/phy/mvsw61xx.c
++++ b/drivers/net/phy/mvsw61xx.c
+@@ -32,6 +32,14 @@ MODULE_AUTHOR("Nikita Nazarenko <nnazare
+ MODULE_LICENSE("GPL v2");
+ MODULE_ALIAS("platform:mvsw61xx");
+ 
++#define BUFF_MAX_SIZE 			4
++#define MV_MAX_LAN_PORTS		4
++#define PORT_LED_ON 			0x8033
++#define PORT_LED_OFF 			0x80ee
++#define LED_OFF 			0
++#define LED_ON				1
++#define LED_UNKNOWN 			2
++
+ /*
+  * Register access is done through direct or indirect addressing,
+  * depending on how the switch is physically connected.
+@@ -710,6 +718,54 @@ static const struct switch_dev_ops mvsw6
+ 
+ /* end swconfig stuff */
+ 
++char sys_buf[BUFF_MAX_SIZE];
++struct switch_dev *g_dev = NULL;
++
++static ssize_t led_show(struct device *dev,
++		struct device_attribute *attr, char *buf)
++{
++	return snprintf(buf, BUFF_MAX_SIZE, "%s\n", sys_buf);
++}
++
++static ssize_t led_write(struct device *dev,
++		struct device_attribute *attr, const char *buf, size_t n)
++{
++	int i, status;
++
++	struct switch_dev *s_dev = g_dev;
++
++	if (!s_dev) {
++		return 0;
++	}
++
++	status = LED_UNKNOWN;
++	if (!strncmp(buf, "off", 3)) {
++		status = LED_OFF;
++	} else if (!strncmp(buf, "on", 2)) {
++		status = LED_ON;
++	}
++
++	if (status != LED_UNKNOWN) {
++		for (i = 0; i < MV_MAX_LAN_PORTS; i++) {
++			switch(status) {
++				case LED_OFF:
++					sw16(s_dev, MV_PORTREG(LED_CONTROL, i), PORT_LED_OFF);
++					break;
++				case LED_ON:
++					sw16(s_dev, MV_PORTREG(LED_CONTROL, i), PORT_LED_ON);
++					break;
++				default:
++					break;
++			}
++		}
++		strncpy(sys_buf, buf, n);
++	}
++
++	return n;
++}
++
++static DEVICE_ATTR(lan_leds, 0644, led_show, led_write);
++
+ static int mvsw61xx_probe(struct platform_device *pdev)
+ {
+ 	struct mvsw61xx_state *state;
+@@ -807,6 +863,12 @@ static int mvsw61xx_probe(struct platfor
+ 
+ 	state->registered = true;
+ 
++	g_dev = &state->dev;
++
++	err = device_create_file(&pdev->dev, &dev_attr_lan_leds);
++	if (err)
++		device_remove_file(&pdev->dev, &dev_attr_lan_leds);
++
+ 	return 0;
+ out_err:
+ 	kfree(state);
+--- a/drivers/net/phy/mvsw61xx.h
++++ b/drivers/net/phy/mvsw61xx.h
+@@ -41,6 +41,9 @@ enum {
+ 	MV_PORT_IN_FILTERED		= 0x12,
+ 	MV_PORT_OUT_ACCEPTED		= 0x13,
+ };
++
++#define MV_PORT_LED_CONTROL 		0x16
++
+ #define MV_PORTREG(_type, _port) MV_SWITCHPORT(_port), MV_PORT_##_type
+ 
+ enum {

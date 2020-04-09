@@ -1,0 +1,820 @@
+#!/bin/sh
+
+#
+# Required config
+#
+SERVICE="streamboost3"
+
+. ${STREAMBOOST_CFGDIR:=/etc/streamboost3}/rc.streamboost3
+
+# We expect the USER_CFG variable to be defined in the rc.streamboost3, or through the environment
+[ -f ${STREAMBOOST_USER_CFG} ] && . ${STREAMBOOST_USER_CFG}
+
+DEFAULT_ACTION=${DEFAULT_ACTION:-"status"}
+DEFAULT_TARGET=${DEFAULT_TARGET:-"all"}
+
+START=99
+
+MONIT_CRON_CMD="streamboost3 status || { logger -t ${SERVICE} 'StreamBoost monit triggered restart'; streamboost3 restart; }"
+MONIT_TIME_INTERVAL="*/3"
+
+# boot flags
+#   we need to keep track of two things:
+#   - whether we have successfully booted (or need to convert start into boot)
+BOOTDONE=$RUNDIR/streamboost.bootdone.flag
+#   - whether we are supposed to boot (so we know how to handle hotplug events
+#     when we haven't booted yet)
+BOOTCALLED=$RUNDIR/streamboost.bootcalled.flag
+#   flag that indicates whether to convert a start operation into boot
+AUTOBOOT=true
+
+# state machine related values
+FSM_SPINLOCK_TIMEOUT=7
+FSM_VAR="$RUNDIR/streamboost3_fsm.state"
+FSM_LOCK="${FSM_VAR}.lck"
+FSM_stale_state=0
+FSM_state_checked=0
+FSM_queue_prefix=/tmp/sb3fsmq
+
+# FSM_action return values
+FSM_ACTION_EXECUTE=0
+FSM_ACTION_DO_NOTHING=1
+
+# possible FSM states
+FSM_STATE_STOPPED=1
+FSM_STATE_RUNNING=2
+FSM_STATE_MAXSTABLE=2
+FSM_STATE_STOPPING=3
+FSM_STATE_STARTING=4
+FSM_STATE_STOPPING_PENDING_START=5
+FSM_STATE_STARTING_PENDING_STOP=6
+FSM_STATE_STARTING_PENDING_RESTART=7
+
+# current FSM state
+FSM_state=0
+
+# mark the current lock with our PID
+FSM_set_lock_PID() {
+	trap 'sb_logger "Termination requested"; FSM_unlock; exit 1' SIGINT SIGTERM SIGEXIT
+	echo $$ >"$FSM_LOCK.pid"
+	return 0
+}
+
+# try hard to get a lock for access to the state machine
+# note that this can fail, so the return code needs to be checked by the caller
+# side effect: this will set FSM_state to the current state
+FSM_lock() {
+	local timeout="${1:-$FSM_SPINLOCK_TIMEOUT}"
+	local oldpid
+	FSM_stale_state=0
+	while [ $timeout -gt 0 ]; do
+		mkdir "$FSM_LOCK" 2>/dev/null && {
+			FSM_state=$(cat "$FSM_VAR" 2>/dev/null || echo $FSM_STATE_STOPPED)
+			sb_logger_debug FSM locked, state=$(FSM_state_name $FSM_state)
+			[ $FSM_state -gt $FSM_STATE_MAXSTABLE -a $FSM_state_checked -eq 0 ] && {
+				local ps_output="$(ps www | grep -v grep)"
+				local instances=$(echo "$ps_output" | grep $0 | wc -l)
+				# 2 instances are our own
+				[ $instances -lt 3 ] && {
+					sb_logger Detected stale transitory state for "$0"
+					sb_logger_debug "$ps_output"
+					FSM_stale_state=1
+				}
+			}
+			FSM_state_checked=1
+			FSM_set_lock_PID
+			# we don't have stale staleness checks, so we just clean the
+			# stale-check-lock up here after we've successfully established
+			# FSM lock ownership
+			rmdir "$FSM_LOCK.stale" 2>/dev/null
+			return 0
+		}
+		# only one instance will check if the FSM lock is stale
+		mkdir "$FSM_LOCK.stale" 2>/dev/null && {
+			oldpid=$(cat "$FSM_LOCK.pid" 2>/dev/null)
+			# if the PID file existed but the process is gone,
+			[ -n "$oldpid" -a ! -e "/proc/$oldpid/maps" ] && {
+				# and the PID file is still the same after the process check,
+				# then the FSM lock is stale (otherwise we could have read the
+				# PID file right before it was deleted, and checked it right
+				# after the owner process exited)
+				[ "$oldpid" = "$(cat $FSM_LOCK.pid)" ] && {
+					sb_logger "FSM lock: stale, $$ override attempt"
+					rmdir "$FSM_LOCK" 2>/dev/null
+					rmdir "$FSM_LOCK.stale" 2>/dev/null
+					continue
+				}
+			}
+			rmdir "$FSM_LOCK.stale" 2>/dev/null
+		}
+		let timeout--
+		sleep 1
+	done
+	sb_logger "FSM: Acquiring lock timed out"
+	return 1
+}
+
+FSM_unlock() {
+	local state=$(cat "$FSM_VAR" 2>/dev/null || echo $FSM_STATE_STOPPED)
+	sb_logger_debug FSM unlocked, state=$(FSM_state_name $state $FSM_state)
+	rm -f "$FSM_LOCK.pid" 2>/dev/null
+	rmdir "$FSM_LOCK" 2>/dev/null
+	trap - SIGINT SIGTERM SIGEXIT
+}
+
+# functions to look up the new state, based on the action and current state
+# The function name contains the received signal (action), while $1 is
+# the FSM's current state.
+# The new state to transition to is echoed before returning.
+# this is a poor man's 2D array, as busybox doesn't even support 1D arrays
+FSM_transition_start() {
+	local state=$1
+	set --  $FSM_STATE_STARTING \
+		$FSM_STATE_STOPPING_PENDING_START \
+		$FSM_STATE_STOPPING_PENDING_START \
+		$FSM_STATE_STARTING \
+		$FSM_STATE_STOPPING_PENDING_START \
+		$FSM_STATE_STARTING_PENDING_RESTART \
+		$FSM_STATE_STARTING_PENDING_RESTART
+	eval echo '$'$state
+}
+FSM_transition_stop() {
+	local state=$1
+	set --  $FSM_STATE_STOPPING \
+		$FSM_STATE_STOPPING \
+		$FSM_STATE_STOPPING \
+		$FSM_STATE_STARTING_PENDING_STOP \
+		$FSM_STATE_STOPPING \
+		$FSM_STATE_STARTING_PENDING_STOP \
+		$FSM_STATE_STARTING_PENDING_STOP
+	eval echo '$'$state
+}
+FSM_transition_start_done() {
+	local state=$1
+	set --  $FSM_STATE_STOPPED \
+		$FSM_STATE_RUNNING \
+		$FSM_STATE_STOPPING \
+		$FSM_STATE_RUNNING \
+		$FSM_STATE_STOPPING_PENDING_START \
+		$FSM_STATE_STOPPING \
+		$FSM_STATE_STOPPING_PENDING_START
+	eval echo '$'$state
+}
+FSM_transition_start_fail() {
+	local state=$1
+	set --  $FSM_STATE_STOPPED \
+		$FSM_STATE_RUNNING \
+		$FSM_STATE_STOPPING \
+		$FSM_STATE_STOPPING \
+		$FSM_STATE_STOPPING_PENDING_START \
+		$FSM_STATE_STOPPING \
+		$FSM_STATE_STOPPING_PENDING_START
+	eval echo '$'$state
+}
+FSM_transition_stop_done() {
+	local state=$1
+	set --  $FSM_STATE_STOPPED \
+		$FSM_STATE_RUNNING \
+		$FSM_STATE_STOPPED \
+		$FSM_STATE_STARTING \
+		$FSM_STATE_STARTING \
+		$FSM_STATE_STARTING_PENDING_STOP \
+		$FSM_STATE_STARTING_PENDING_RESTART
+	eval echo '$'$state
+}
+
+FSM_state_name() {
+	case "$1" in
+		$FSM_STATE_STOPPED)
+			echo "stopped"
+			;;
+		$FSM_STATE_RUNNING)
+			echo "running"
+			;;
+		$FSM_STATE_STOPPING)
+			echo "stopping"
+			;;
+		$FSM_STATE_STARTING)
+			echo "starting"
+			;;
+		$FSM_STATE_STOPPING_PENDING_START)
+			echo "stopping pending start"
+			;;
+		$FSM_STATE_STARTING_PENDING_STOP)
+			echo "starting pending stop"
+			;;
+		$FSM_STATE_STARTING_PENDING_RESTART)
+			echo "starting pending restart"
+			;;
+		*)
+			echo "unknown"
+			;;
+	esac
+}
+
+# add an action to the pending queue and output the file name
+# the first instance which successfully locks the FSM will use
+#   this queue to replay actions in the order they were received in
+# not all commands should be enqueued (only start/stop and derivatives)
+# since the creation date only has a 1 second resolution and can cause
+#   rapid fire commands to be dequeued in the wrong order, we place a
+#   more accurate counter in the file name (depending on system support)
+FSM_enqueue()
+{
+	local timestamp
+	if [ -r /proc/timer_list ]; then
+		# jiffies counter may not be available, but is more accurate
+		timestamp=$(grep ^jiffies </proc/timer_list | head -1 | cut -d ' ' -f 2).00
+	else
+		# uptime in 10-millisecond increments
+		timestamp=$(cut -d ' ' -f 1 </proc/uptime)
+	fi
+	mktemp "$FSM_queue_prefix.$timestamp.$$.$1.XXXXXX"
+	sb_logger_debug FSM enqueue action=$1
+}
+
+# dequeue all received actions for processing (applying to the FSM),
+#   in the order they were received in
+# when there is nothing to dequeue, the output will be blank
+FSM_dequeue()
+{
+	# we can't use a simple ls -l here, because we need to sort the
+	# filenames as numbers, and handle the case when the count goes
+	# up to the next order of magnitude
+	for f in $(echo -n "$FSM_queue_prefix".* | sed '/\*/d;s|'"$FSM_queue_prefix"'\.\([^ ]*\) *|\1\n|g' | sort -n); do
+		rm -f "$FSM_queue_prefix.$f" 2>/dev/null
+		echo $f
+	done | cut -d '.' -f 4
+}
+
+# entry point for the state machine controller - call this only, before each action
+# params: action to apply to the state machine
+#         supported actions are: start/boot/init, stop/shutdown, start_done, start_fail, stop_done
+#         all other actions will be approved with no effect on the state machine
+# return values: 0 - take the action that is set in FSM_next_action
+#                1 - do nothing (FSM_next_action will be empty)
+# side effects: manipulates global variables, don't run this in a subshell!
+FSM_action() {
+	local action="$1"
+	local orig_action="$action"
+	local action_start="start"
+	local action_stop="stop"
+	local retval=$FSM_ACTION_DO_NOTHING
+	unset FSM_next_action
+
+	local bootflags
+	[ -e $BOOTCALLED ] && bootflags="BOOTCALLED" || bootflags="!BOOTCALLED"
+	[ -e $BOOTDONE ] && bootflags="$bootflags BOOTDONE" || bootflags="$bootflags !BOOTDONE"
+	[ "$AUTOBOOT" = "true" ] && bootflags="$bootflags AUTOBOOT" || bootflags="$bootflags !AUTOBOOT"
+	sb_logger_debug FSM_action action="$action" "$bootflags"
+
+	[ ! -e $BOOTDONE ] && [ "$AUTOBOOT" = "true" -o -e $BOOTCALLED ] && {
+		action_start="boot"
+		[ "$action" = "start" ] && {
+			sb_logger_debug boot has not been run yet, auto-booting...
+			action=boot
+		}
+	}
+	[ "$action" = "boot" -o "$action" = "init" ] && {
+		action_start="$action"
+		action="start"
+		touch $BOOTCALLED
+	}
+	[ "$action" = "shutdown" ] && {
+		action_stop="$action"
+		action="stop"
+	}
+	case "$action" in
+		start|stop|start_done|start_fail|stop_done)
+			FSM_enqueue "$action" >/dev/null
+			FSM_lock || return $FSM_ACTION_DO_NOTHING
+			;;
+		status)
+			# lock to get current state, then unlock
+			FSM_lock && FSM_unlock
+			if [ $FSM_state -ne $FSM_STATE_STOPPED -a $FSM_state -ne $FSM_STATE_RUNNING ]; then
+				[ $FSM_stale_state -eq 1 ] && echo >&2 'Warning: stale state detected. Please run "streamboost3 stop" or "streamboost3 start" to recover.'
+				echo >&2 "FSM state is $(FSM_state_name $FSM_state), please try again later."
+				return $FSM_ACTION_DO_NOTHING
+			fi
+			FSM_next_action="$orig_action"
+			return $FSM_ACTION_EXECUTE
+			;;
+		*)
+			FSM_next_action="$orig_action"
+			return $FSM_ACTION_EXECUTE
+	esac
+
+	local new_state=$FSM_state
+	local old_state=$FSM_state
+	local dq_action
+
+	for dq_action in $(FSM_dequeue); do
+		action=$dq_action
+		sb_logger_debug Dequeued action $action
+		if [ $FSM_stale_state -eq 0 ]; then
+			new_state=$(FSM_transition_$action $old_state)
+		else
+			FSM_state=$FSM_STATE_RUNNING
+			if [ $action = "start" ]; then
+				new_state=$FSM_STATE_STOPPING_PENDING_START
+			else
+				new_state=$FSM_STATE_STOPPING
+			fi
+			FSM_stale_state=0
+			sb_logger stale state detected
+		fi
+		old_state=$new_state
+	done
+
+	[ $new_state -ne $FSM_state ] && {
+		sb_logger_debug FSM_action new_state=$(FSM_state_name $new_state) old_state=$(FSM_state_name $FSM_state) action="$action"
+		if [ $new_state -eq $FSM_STATE_STOPPED ]; then
+			rm $FSM_VAR
+		else
+			echo $new_state >$FSM_VAR
+			if [ $new_state -eq $FSM_STATE_STARTING ]; then
+				FSM_next_action="$action_start"
+				retval=$FSM_ACTION_EXECUTE
+			elif [ $new_state -eq $FSM_STATE_STOPPING -a $FSM_state -ne $FSM_STATE_STOPPING_PENDING_START ]; then
+				FSM_next_action="$action_stop"
+				retval=$FSM_ACTION_EXECUTE
+			elif [ $new_state -eq $FSM_STATE_STOPPING_PENDING_START -a $FSM_state -ne $FSM_STATE_STOPPING ]; then
+				FSM_next_action="$action_stop"
+				retval=$FSM_ACTION_EXECUTE
+			fi
+		fi
+		FSM_state=$new_state
+	}
+
+	FSM_unlock
+	sb_logger_debug "FSM_action returning $retval for $FSM_next_action"
+	return $retval
+}
+
+# sb3_get_targets returns a list of files or folders in the location using
+# a given filter. The full path of the targets is returned.
+sb3_get_targets() {
+	local location="$1"
+	local filter="$2"'*'
+	local list="${location}/${filter}"
+	for f in $list; do
+		[ -f "$f" -o -L "$f" ] && echo "$f"
+	done
+}
+
+# sb3_all_targets returns all scripts (filename only) available in the
+# init.d directory. The '*' asterik is the filter passed to sb3_get_targets
+sb3_all_targets() {
+	local list=$(sb3_get_targets "${INITDIR}" "")
+	for l in $list; do
+		echo ${l##*/}
+	done
+}
+
+# sb3_enabled_targets returns all scripts (filename only) available in the
+# rc.d directory. The filter passed is expected to match S?? or K?? whether you
+# want the START or STOP functionality.
+sb3_enabled_targets() {
+	local filter="$1"
+	local list=$(sb3_get_targets "${RCDIR}" "${filter}")
+	for l in $list; do
+		echo ${l##*/${filter}}
+	done
+}
+
+# sb3_all_packages returns all package names
+sb3_all_packages() {
+	local pkgs=$(opkg depends streamboost3 | \
+		grep -v "depends on:" | \
+		grep -v libc | \
+		sort)
+	echo "streamboost3 $pkgs"
+}
+
+sb_can_start() {
+	if ! is_interface_up lan; then
+		sb_logger_debug "refusing to start StreamBoost3: LAN ($LAN_IFACE) is not up"
+		return 1
+	fi
+	if ! is_interface_up wan; then
+		sb_logger_debug "refusing to start StreamBoost3: WAN ($WAN_IFACE) is not up"
+		return 2
+	fi
+	# it is not possible to check firewall status during a hotplug event
+	# because this function returns false until the event has completed.
+	# in other words if the streamboost3 script is being executed in the
+	# context of a hotplug firewall up event, is_firewall_up returns false.
+	# is_firewall_up || return 3
+	return 0
+}
+
+enable_hotplug() {
+	ln -s ${CFGDIR}/hotplug /etc/hotplug.d/iface/40-streamboost3
+	ln -s ${CFGDIR}/hotplug /etc/hotplug.d/firewall/20-streamboost3
+}
+
+disable_hotplug() {
+	rm -f /etc/hotplug.d/firewall/20-streamboost3
+	rm -f /etc/hotplug.d/iface/40-streamboost3
+}
+
+enable() {
+	sb3_set system.enabled true
+	default_enable "$@"
+	enable_hotplug
+}
+
+disable() {
+	sb3_set system.enabled false
+	disable_hotplug
+	default_disable "$@"
+}
+
+boot() {
+	# some platforms don't have matching /lib/modules/$(uname -r)
+	# for example, on one platform so far, we had modules installed
+	# into /lib/modules/3.10.20, but uname -r reported
+	# 3.10.20-al-5.0-ga_na, which broke the typical reference
+	# to /lib/modules/$(uname -r)
+	local kernel_version=$(uname -r)
+	[ -d /lib/modules/${kernel_version} ] || {
+		local modules_version=$(basename /lib/modules/*)
+		ln -s /lib/modules/${modules_version} /lib/modules/${kernel_version}
+	}
+	# this call must be the last line of the function
+	sb_can_start
+}
+
+start() {
+	[ -e $BOOTDONE ] || sb_logger_debug "refusing to start StreamBoost3: boot hasn't run yet"
+	# this call must be the last line of the function
+	sb_can_start && [ -e $BOOTDONE ]
+}
+
+apply_action() {
+	local t action="$1" target="$2" errorcount=0
+	shift; shift;
+	local invalid=""
+
+	sb_logger_debug apply_action action="$action" target="$target"
+
+	for t in $target; do
+		local f="${INITDIR}/$t"
+		if [ -f $f ]; then
+			$f "$action" "$@" || {
+				let errorcount++
+			}
+		else
+			if [ "${action}" = "info" ]; then
+				SERVICE=$t
+				info $t
+			else
+				invalid="${invalid} $t"
+				let errorcount++
+			fi
+		fi
+	done
+
+	# If any invalid targets were supplied then print them here
+	if [ ! -z "${invalid}" ]; then
+		echo "Invalid target(s): ${invalid}"
+		echo "Valid targets: $(sb3_all_targets)"
+	fi
+
+	return $errorcount
+}
+
+print_version() {
+	local ver=$(cat ${STREAMBOOST_CFGDIR}/version)
+	local maj="0x$(echo ${ver} | cut -b 3-4)"
+	local min="0x$(echo ${ver} | cut -b 5-6)"
+	local build="0x$(echo ${ver} | cut -b 7-10)"
+	printf "%d.%d.%d\n" ${maj} ${min} ${build}
+}
+
+parse_entry() {
+	local entry="$@"
+	pkey=$(echo "$entry" | sed 's/^\([^= \t]*\).*$/\1/')
+	pvalue=$(echo "$entry" | sed 's/^[^=]*=[ \t]*\(.*\)/\1/')
+}
+
+# $1: swap file
+# $2: key
+# $3: value
+add_to_swap() {
+	local swpfile=$1
+	local tmpfile=$(mktemp /tmp/add2swap.XXXXXX)
+	grep -v "^$2""[[:space:]]*=" $swpfile >$tmpfile 2>/dev/null
+	echo "$2=$3" >> $tmpfile
+	cp $tmpfile $swpfile
+	rm -f $tmpfile
+}
+
+clean_persist_file() {
+	rm -f $PERSISTSWAPFILE 2>/dev/null
+	if [ -e "$PERSISTFILE" ]
+	then
+		while read -r line
+		do
+			parse_entry $line
+			add_to_swap $PERSISTSWAPFILE "$pkey" "$pvalue"
+		done < "$PERSISTFILE"
+		sort $PERSISTSWAPFILE > $PERSISTFILE 2>/dev/null
+		rm -f $PERSISTSWAPFILE 2>/dev/null
+	fi
+}
+
+set_persist_entry() {
+	(cp $PERSISTFILE $PERSISTSWAPFILE || touch $PERSISTSWAPFILE) 2>/dev/null
+	add_to_swap $PERSISTSWAPFILE "$1" "$2"
+	cp $PERSISTSWAPFILE $PERSISTFILE
+	clean_persist_file
+}
+
+delete_persist_entry() {
+	local tag=^"$1""[[:space:]]*="
+	grep -v "$tag" $PERSISTFILE > $PERSISTSWAPFILE 2>/dev/null
+	cp $PERSISTSWAPFILE $PERSISTFILE
+	clean_persist_file
+}
+
+get_persist_value() {
+	local tag=^"$1""="
+	clean_persist_file
+	local line=$(grep "$tag" $PERSISTFILE 2>/dev/null)
+	parse_entry $line
+	echo $pvalue
+}
+
+sb3_set() {
+	local line="$@"
+
+	# handle the case of the user typing "key=value" or "key value"
+	local key=$(echo ${line} | sed 's/[=[:space:]].*//')
+	local value=$(echo ${line##${key}} | sed 's/^[=[:space:]]*//')
+
+	[ -z "${key}" ] && return
+
+	set_persist_entry "${key}" "${value}"
+	nxcli -q SB_SET -p "${key};${value}" 2>/dev/null | grep SB_SET | awk -F';' \
+		'{print "Set of " $4 " to value " $5 " acknowledged by component " $2}'
+}
+
+sb3_get() {
+	local params="$@"
+	local rc=0
+
+	local tmpfile1=$(mktemp /tmp/sb3get.XXXXXX)
+	if [ "${params}" = "" ]; then
+		local live
+		cat $PERSISTFILE >${tmpfile1} 2>/dev/null
+		live=$(nxcli -q SB_GET 2>/dev/null | grep SB_GET | awk -F';' \
+			'{printf "%-20s=%-20s\n", $4, $5}')
+		echo "${live}" | while IFS='\n' read -r line; do
+			parse_entry $line
+			[ -n "${pkey}" ] && {
+				add_to_swap ${tmpfile1} "${pkey}" "${pvalue}"
+			}
+		done
+		cat ${tmpfile1}
+	else
+		nxcli -q SB_GET -p "${params}" 2>/dev/null | grep SB_GET | awk -F';' \
+			'{printf "%s\n", $5}' | tee ${tmpfile1}
+		if [ $(cat ${tmpfile1} | wc -l) -eq 0 ]; then
+			get_persist_value "${params}"
+			if [ -z "${pkey}" ];  then
+				rc=1
+			fi
+		else
+			rc=0
+		fi
+	fi
+	rm ${tmpfile1}
+	return $rc
+}
+
+sb3_unset() {
+	delete_persist_entry "$@"
+}
+
+
+# handles interface down events including firewall and network
+sb3_ifdn() {
+	sb_logger_debug "Interface down event received"
+	FSM_action "stop"
+	dispatch_action "$FSM_next_action" "all" "$@"
+}
+
+# handles interface up events including firewall and network
+sb3_ifup() {
+	# don't initiate boot if it hasn't been called already
+	[ ! -e $BOOTCALLED ] && unset AUTOBOOT
+	sb_logger_debug "Interface up event received"
+	FSM_action "start"
+	dispatch_action "$FSM_next_action" "all" "$@"
+}
+
+##
+# Publish stats for all wireless devices
+#
+update_wifi_stats() {
+	source /etc/streamboost3/devices.d/clients.sh && \
+		update_wlan_clients
+	source /etc/streamboost3/devices.d/interfaces.sh && \
+		update_wlan_interfaces
+	source /etc/streamboost3/devices.d/neighbors.sh && \
+		update_wlan_all_neighbors
+
+	nxcli -q PUBLISHSTATS -p wireless -t diki
+	return 0
+}
+
+# StreamBoost monitoring
+start_monit() {
+	local cron_cmd=$(build_cron "${MONIT_CRON_CMD}" "*" "${MONIT_TIME_INTERVAL}")
+	add_to_cron "${cron_cmd}"
+}
+
+stop_monit() {
+	remove_from_cron "${MONIT_CRON_CMD}"
+}
+
+# execute an action directive
+#
+# generally, this equates to applying the directive as an action;
+# however, it may result in applying several sub-actions, depending on
+# the directive itself and/or the return values from FSM_action
+dispatch_action() {
+	local retval
+	local target_all
+	local action="$1"
+	local target="$2"
+	shift 2
+
+	sb_logger_debug dispatch_action action="$action" target="$target"
+
+	[ "$target" = "all" ] && target_all="yeah"
+
+	case "${action:-nop}" in
+		# Global-only actions
+		nop)
+		;;
+		version)
+			print_version
+		;;
+		update)
+			if [ $target_all ]; then
+				${action} "$@"
+			else
+				echo "${action} is not supported for individual daemons"
+			fi
+		;;
+		upload)
+			if [ $target_all ]; then
+				apply_action "$action" "$(sb3_enabled_targets "S??")" "$@"
+			else
+				apply_action "$action" "$target" "$@"
+			fi
+		;;
+		reload|flashanything|measure|applybw|auto_update|auto_upload|setbw|print_versions|status_monit)
+			echo "$action not supported yet!"
+		;;
+		disable|enable|enabled)
+			if [ $target_all ]; then
+				apply_action "$action" "$(sb3_all_targets)" "$@"
+				INITDIR="/etc/init.d"
+				RCDIR="/etc/rc.d"
+				$action "$@"
+			else
+				apply_action "$action" "$target" "$@"
+			fi
+		;;
+		info)
+			# note this is run on sb3_all_packages, not just sb3_all_targets
+			if [ $target_all ]; then
+				apply_action "$action" "$(sb3_all_packages)" "$@"
+				INITDIR="/etc/init.d"
+				RCDIR="/etc/rc.d"
+				$action "$@"
+			else
+				apply_action "$action" "$target" "$@"
+			fi
+		;;
+		status)
+			if [ $target_all ]; then
+				apply_action "$action" "$(sb3_all_targets)" "$@"
+			else
+				apply_action "$action" "$target" "$@"
+			fi
+		;;
+		boot|start)
+			if [ $target_all ]; then
+				# let the streamboost script perform any
+				# system readiness checks
+				$action "$@" && apply_action "$action" "$(sb3_enabled_targets "S??")" "$@"
+				retval=$?
+				if [ $retval -eq 0 ]; then
+					[ "$action" = "boot" ] && touch $BOOTDONE
+					start_monit
+					FSM_action start_done
+				else
+					FSM_action start_fail
+				fi
+				[ "$FSM_next_action" ] && unset retval && dispatch_action "$FSM_next_action" "$target" "$@"
+			else
+				apply_action "$action" "$target" "$@"
+			fi
+		;;
+		stop|shutdown)
+			if [ $target_all ]; then
+				stop_monit
+				apply_action "$action" "$(sb3_enabled_targets "K??")" "$@"
+				retval=$?
+				FSM_action stop_done && unset retval && dispatch_action "$FSM_next_action" "$target" "$@"
+			else
+				apply_action $action "$target" "$@"
+			fi
+		;;
+		restart)
+			if [ $target_all ]; then
+				dispatch_action stop all
+				dispatch_action start all
+			else
+				apply_action stop "$target" "$@"
+				apply_action start "$target" "$@"
+			fi
+		;;
+		ifdn|fwdn)
+			sb3_ifdn "$@"
+		;;
+		ifup|fwup)
+			sb3_ifup "$@"
+		;;
+		set)
+			sb3_set "$@"
+		;;
+		get)
+			sb3_get "$@"
+		;;
+		unset)
+			sb3_unset "$@"
+		;;
+		start_qdiscs|stop_qdiscs|setup_iptables|teardown_iptables|sync_qdiscs)
+			apply_action $action qdiscman3 "$@"
+		;;
+		start_qos)
+			dispatch_action start_qdiscs "$@"
+			dispatch_action setup_iptables "$@"
+		;;
+		stop_qos)
+			dispatch_action teardown_iptables "$@"
+			dispatch_action stop_qdiscs "$@"
+		;;
+		update_wifi_stats)
+			update_wifi_stats "$@"
+		;;
+		listcmd)
+			echo -e "version update upload enable disable enabled info status"\
+				"boot start stop shutdown restart ifdn fwdn ifup fwup set get unset"\
+				"start_qdiscs stop_qdiscs setup_iptables teardown_iptables start_qos stop_qos"
+		;;
+		*)
+			echo "Unknown command: ${action}"
+			echo "Usage: $0 [daemon](optional) [action]"
+			exit 3
+	esac
+
+	return ${retval:-$?}
+}
+
+#
+# MAIN
+#
+sb_logger_debug StreamBoost3 call: "$@"
+
+[ "$1" = "--verbose" ] && {
+	VERBOSE=yes
+	shift
+}
+export VERBOSE
+
+target=${1:-$DEFAULT_TARGET}
+shift
+ls ${INITDIR} | grep $target >/dev/null 2>&1
+if [ $? = 1 -a $target != "all" ]; then
+	action=$target
+	target="all"
+else
+	action=${1:-$DEFAULT_ACTION}
+	shift
+fi
+
+[ "$target" = "all" ] && {
+	FSM_action "$action"
+	# return failure if the status command was cancelled by the FSM
+	[ "$action" = "status" -a "$FSM_next_action" != "$action" ] && return 101
+	action="$FSM_next_action"
+}
+
+dispatch_action "$action" "$target" "$@"

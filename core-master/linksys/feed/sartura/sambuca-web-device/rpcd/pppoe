@@ -1,0 +1,70 @@
+#!/bin/sh
+
+wan_iface="$(uci -q get network.wan.ifname)"
+network_proto="$(uci -q get network.wan.proto)"
+modelNumber="$(uci -q get linksys.@hardware[0].modelNumber)"
+testfile="/tmp/wanresult"
+wan_status="none"
+
+
+pppoe_check() {
+	# Run discovery and set protocol if needed
+	$(pppoe-discovery -I $wan_iface &> $testfile)
+
+	if [ "$(grep -w "Access-Concentrator" $testfile)" ]; then
+		$(uci set network.wan.proto=pppoe)
+		$(uci commit network)
+		wan_status="pppoe"
+	fi
+}
+
+case "$1" in
+	list)
+		echo '{"dhcp":{}, "check":{}}'
+	;;
+	call)
+		case "$2" in
+			dhcp)
+				# Check if HK SKU
+				if [ "$modelNumber" == "WRT32X-HK" ]; then
+
+					# Run DHCP check
+					logger -t "$0" "DHCP detection initalized.."
+					$(udhcpc -nRSq -i $wan_iface > $testfile)
+
+					if [ "$(grep -w "obtained" $testfile)" ]; then
+
+						# Create marker
+						$(touch /tmp/hk_dhcp)
+
+						# Change protocol if needed
+						if [ "$network_proto" != "dhcp" ]; then
+							$(uci set network.wan.proto=dhcp)
+							$(uci commit network)
+						fi
+
+						wan_status="dhcp"
+					fi
+				fi
+
+				printf '{ "values": { "status":"%s" }}', $wan_status
+			;;
+			check)
+				# If HK SKU, check if the DHCP was detected first
+				if [ "$modelNumber" == "WRT32X-HK" ]; then
+					if [ -f "/tmp/hk_dhcp" ]; then
+						wan_status="dhcp"
+					else
+						# Else, perform PPPoE check
+						pppoe_check
+					fi
+				else
+					# For any other model #, run PPPoE check
+					pppoe_check
+				fi
+
+				printf '{ "values": { "status":"%s" }}', $wan_status
+			;;
+		esac
+	;;
+esac

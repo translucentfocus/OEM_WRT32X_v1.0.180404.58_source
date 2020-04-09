@@ -1,0 +1,57 @@
+#!/bin/sh /etc/rc.common
+
+START=80
+USE_PROCD=1
+
+boot() {
+	eula=$(uci get linksys.@firmware[0].eula_accepted)
+	[ "$eula" -eq "1" ] && exit 0
+
+	testfile=/tmp/wanresult
+	wan=$(uci get network.wan.ifname)
+
+	# make sure the interface is up
+	ifconfig $wan up
+
+	check_proto() {
+		current_proto=$(uci get network.wan.proto)
+		if [ "$current_proto" != "$set_proto" ]; then
+			uci set network.wan.proto=$set_proto
+			uci commit network
+			/etc/init.d/network restart
+		fi
+	}
+
+    state=`cat /sys/class/net/$wan/operstate`
+    time_out=60
+    while [ $time_out -gt 0 ] && [ "$state" != "up" ]
+    do
+        echo $time_out $state
+        sleep 3
+        state=`cat /sys/class/net/$wan/operstate`
+        time_out=`expr $time_out - 3`
+    done
+    # try pppoe first
+    try_cnt=0
+    logger -t "${0##*/}" "Start pppoe-discovery"
+    while [ $try_cnt -lt 3 ]
+    do
+        pppoe-discovery -I $wan > $testfile
+
+        if [ -f "$testfile" ]; then
+            logger -t "${0##*/}" "discovery: $(cat $testfile)"
+        else
+            logger -t "${0##*/}" "discovery failed"
+        fi
+
+        if grep -q Access-Concentrator $testfile; then
+            set_proto=pppoe
+            check_proto
+            rm $testfile
+            exit 0
+        fi
+        try_cnt=`expr $try_cnt + 1`
+    done
+
+exit 0
+}

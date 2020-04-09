@@ -1,0 +1,22 @@
+#!/bin/sh
+
+if [ "$INTERFACE" = "wan" ] && [ "$ACTION" = "ifup" ]
+then
+	# Exit if EULA is accepted
+	eula=$(uci -q get linksys.@firmware[0].eula_accepted)
+	[ "$eula" -eq "1" ] && exit 0
+
+	# Get subnets for lan and wan
+	lan_subnet=$(uci get network.lan.ipaddr | cut -d '.' -f3)
+	wan_subnet=$(ifconfig wan | grep -w "inet" | awk '{print $2}' | cut -d ':' -f2 | cut -d '.' -f3)
+
+	# If subnet is the same, randomize lan IP
+	if [[ $lan_subnet == $wan_subnet ]]; then
+		rn=$(awk 'function rn(n) { return int(rand()*n); } BEGIN {{ srand(); }{ printf("%d.%d", rn(254), rn    (254    ))}}')
+		uci set network.lan.ipaddr=10.$rn.1
+		uci commit network
+
+		# Restart network to refresh changes
+		/etc/init.d/network restart
+	fi
+fi

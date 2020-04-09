@@ -1,0 +1,29 @@
+#!/bin/sh
+
+if [[ "$INTERFACE" = "8/6/80" ]]; then
+
+case $ACTION in
+	add)
+		# Depending on the type of storage and filesystem, detecting can take a while.
+		# Use killtime to set time limit for this, after drive will be shown as invalid.
+		killtime=10
+
+		while [[ $killtime -gt 0 ]]; do
+			if [[ -z $usb_dev ]]; then
+				usb_port=$(echo ${DEVICENAME} | cut -b1)
+				[ ! -z "$usb_port" -a ! -f "/tmp/detect_usb${usb_port}" ] && touch /tmp/detect_usb${usb_port}
+				usb_dev=$(ls /sys$DEVPATH/host*/target*:0:0/*:0:0:0/block/)
+				sleep 1
+				killtime=$((killtime-1))
+			else
+				break
+			fi
+		done
+
+		/sbin/usb-detect mount
+	;;
+	remove)
+		/sbin/usb-detect umount
+	;;
+esac
+fi

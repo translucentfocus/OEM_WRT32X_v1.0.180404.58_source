@@ -1,0 +1,219 @@
+#!/bin/sh
+
+case "$1" in
+	list)
+		echo '{ "apply": { },'\
+			'"add_krouter_endpoint": { "macaddr": "str" },'\
+			'"is_krouter_endpoint": { "macaddr": "str" },'\
+			'"list_xbox_macaddr": { },'\
+			'"add_macprio": { "macaddr": "str", "prio": "int" },'\
+			'"del_macprio": { "macaddr": "str" },'\
+			'"get_macprio": { "macaddr": "str" },'\
+			'"list_macprio": { },'\
+			'"set_xbox_detect": { "enabled": "int" },'\
+			'"get_xbox_detect": { } },'\
+	;;
+	call)
+		case "$2" in
+			set_xbox_detect)
+				read input
+
+				logger -t "krouter" "call" "$2" "$input"
+
+				enabled=$(echo "$input" | jsonfilter -e '@.enabled')
+
+				valid="false"
+
+				if [ "$enabled" = "0" -o "$enabled" = "1" ]; then
+					valid="true"
+					uci -q set krouter.krouter.xbox_detection=$enabled
+					reload_config
+				fi
+
+				printf '{"values": {"valid":"%s"}}', $valid
+			;;
+			get_xbox_detect)
+				read input
+
+				logger -t "krouter" "call" "$2" "$input"
+
+				enabled="0"
+				enabled=$(uci -q get krouter.krouter.xbox_detection)
+
+				printf '{"values": {"enabled":"%s"}}', $enabled
+			;;
+			list_xbox_macaddr)
+				json="{ "
+				for elem in $(uci -q get krouter.krouter.xbox_macaddr); do
+					json="$json \"macaddr\": \"$elem\", "
+				done
+				json="${json%%,} }"
+
+				echo "$json"
+			;;
+			apply)
+				read input
+
+				logger -t "krouter" "call" "$2" "$input"
+
+				reload_config
+				printf '{"values": {"valid":"true"}}'
+			;;
+			add_macprio)
+				read input
+
+				logger -t "krouter" "call" "$2" "$input"
+
+				# defaults
+				prio="-1"
+				valid="false"
+				present="false"
+
+				macaddr=$(echo "$input" | jsonfilter -e '@.macaddr')
+				prio=$(echo "$input" | jsonfilter -e '@.prio')
+
+				# Set MAC to lowercase
+				macaddr=$(echo $macaddr | awk '{print tolower($0)}')
+
+				[ "$prio" -ge 1 -a "$prio" -le 6 ] && valid="true"
+
+				if [ "$valid" = "true" ]; then
+					uci -q get krouter.krouter.macprio | grep -q $macaddr && present="true"
+
+					if [ "$present" = "false" ]; then
+						uci -q add_list "krouter.krouter.macprio=$macaddr;$prio"
+						reload_config
+						logger -t krouter "adding $macaddr to $prio"
+					fi
+				fi
+
+				num_krouter_macprio=$(uci -q get krouter.krouter.macprio | wc -w)
+
+				if [ $num_krouter_macprio -gt 64 ]; then
+					first_elem=$(uci -q get krouter.krouter.macprio | sed 's, .*$,,')
+					uci -q del_list krouter.krouter.macprio=$first_elem
+				fi
+
+				printf '{"values": {"valid":"%s", "present":"%s", "num_krouter_macprio":"%s"}}', \
+							$valid $present $num_krouter_macprio
+			;;
+			del_macprio)
+				read input
+
+				logger -t "krouter" "call" "$2" "$input"
+
+				macaddr=$(echo "$input" | jsonfilter -e '@.macaddr')
+				macaddr=$(echo $macaddr | awk '{print tolower($0)}')
+
+				present="false"
+
+				for elem in $(uci -q get krouter.krouter.macprio); do
+					echo $elem | grep -q "$macaddr;" && {
+						uci -q del_list krouter.krouter.macprio="$elem"
+						reload_config
+						present="true"
+						break
+					}
+				done
+
+				num_krouter_macprio=$(uci -q get krouter.krouter.macprio | wc -w)
+
+				printf '{ "values": {"present":"%s", "num_krouter_macprio":"%s"}}', \
+							$present $num_krouter_macprio
+			;;
+			get_macprio)
+				read input
+
+				logger -t "krouter" "call" "$2" "$input"
+
+				macaddr=$(echo "$input" | jsonfilter -e '@.macaddr')
+				macaddr=$(echo $macaddr | awk '{print tolower($0)}')
+
+				present="false"
+				prio="0"
+
+				for elem in $(uci -q get krouter.krouter.macprio); do
+					echo $elem | grep -q "^$macaddr;" && {
+						present="true"
+						prio=${elem#*;}
+						break
+					}
+				done
+
+				num_krouter_macprio=$(uci -q get krouter.krouter.macprio | wc -w)
+
+				printf '{ "values": {"present":"%s", "prio":"%s", "num_krouter_macprio":"%s"}}', \
+							$present $prio $num_krouter_macprio
+			;;
+			list_macprio)
+				json="{ "
+				for elem in $(uci -q get krouter.krouter.macprio); do
+					local mac=${elem%;*}
+					local prio=${elem#*;}
+					json="$json \"$mac\": $prio, "
+				done
+				json="${json%%,} }"
+
+				echo "$json"
+			;;
+			add_krouter_endpoint)
+				read input
+
+				logger -t "krouter" "call" "$2" "$input"
+
+				macaddr=$(echo "$input" | jsonfilter -e '@.macaddr')
+				macaddr=$(echo $macaddr | awk '{print tolower($0)}')
+
+				valid="false"
+				present="false"
+
+				echo $macaddr | egrep -q "^([0-9a-f]{2}:){5}[0-9a-f]{2}$" && valid="true"
+				grep -q -i $macaddr /proc/net/arp || {
+					valid="false"
+					logger -t krouter "ignoring $macaddr as krouter endpoint as it's not in local arp table"
+				}
+
+				if [ "$valid" = "true" ]; then
+					uci -q get krouter.krouter.endpoints | grep -q $macaddr && present="true"
+
+					if [ "$present" = "false" ]; then
+						uci -q add_list krouter.krouter.endpoints=$macaddr
+						reload_config
+					fi
+				fi
+
+				num_krouter_endpoints=$(uci -q get krouter.krouter.endpoints | wc -w)
+
+				if [ $num_krouter_endpoints -gt 64 ]; then
+					first_elem=$(uci -q get krouter.krouter.endpoints | sed 's, .*$,,')
+					uci -q del_list krouter.krouter.endpoints=$first_elem
+				fi
+
+				printf '{ "values": {"valid":"%s", "present":"%s", "num_krouter_endpoints":"%s"}}', \
+							$valid $present $num_krouter_endpoints
+			;;
+			is_krouter_endpoint)
+				read input
+
+				logger -t "krouter" "call" "$2" "$input"
+
+				macaddr=$(echo "$input" | jsonfilter -e '@.macaddr')
+				macaddr=$(echo $macaddr | awk '{print tolower($0)}')
+
+				valid="false"
+				present="false"
+
+				echo $macaddr | egrep -q "^([0-9a-f]{2}:){5}[0-9a-f]{2}$" && valid="true"
+
+				if [ "$valid" = "true" ]; then
+					uci -q get krouter.krouter.endpoints | grep -q $macaddr && present="true"
+				fi
+
+				num_krouter_endpoints=$(uci -q get krouter.krouter.endpoints | wc -w)
+
+				printf '{ "values": {"valid":"%s", "present":"%s", "num_krouter_endpoints":"%s"}}', \
+							$valid $present $num_krouter_endpoints
+			;;
+		esac
+	;;
+esac

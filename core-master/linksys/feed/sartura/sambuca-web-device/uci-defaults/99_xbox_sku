@@ -1,0 +1,11 @@
+#!/bin/sh
+
+# Setup xbox detection based on the model number
+modelNumber="$(uci get linksys.@hardware[0].modelNumber)"
+
+if [ "$modelNumber" == "WRT32XB" ]; then
+	uci set krouter.krouter.xbox_detection='1'
+	uci commit krouter
+fi
+
+exit 0

@@ -1,0 +1,16 @@
+#!/bin/sh
+
+case "$1" in
+        list)
+                echo '{ "info":{} }'
+        ;;
+        call)
+                case "$2" in
+                        info)
+                                IDLE=$(top -bn1 | awk NR==2'{print $8}' | cut -d '%' -f1)
+                                TOTAL=$((100-IDLE))
+
+                                printf '{ "values": { "total" : %s }}', $TOTAL
+                esac
+        ;;
+esac

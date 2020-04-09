@@ -1,0 +1,23 @@
+#!/bin/sh
+
+# Check linksys config for the firstboot
+firstboot=$(uci get linksys.@firmware[0].eula_accepted)
+
+ if [ "$firstboot" != "1" -o -f "/etc/config/netshare" ]; then
+	if [[ $(ls /etc/rc.d/ | grep 'S*samba$') ]]; then
+		/etc/init.d/samba stop
+		/etc/init.d/samba disable
+	fi
+
+	if [[ $(ls /etc/rc.d/ | grep S*vsftpd) ]]; then
+		/etc/init.d/vsftpd stop
+		/etc/init.d/vsftpd disable
+	fi
+
+	if [[ $(ls /etc/rc.d/ | grep S*minidlna) ]]; then
+		/etc/init.d/minidlna stop
+		/etc/init.d/minidlna disable
+	fi
+fi
+
+exit 0

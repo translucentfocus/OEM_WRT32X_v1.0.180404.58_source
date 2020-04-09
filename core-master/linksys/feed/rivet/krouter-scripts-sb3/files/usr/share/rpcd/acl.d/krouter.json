@@ -1,0 +1,29 @@
+{
+        "superuser": {
+                "description": "Krouter access role",
+                "write": {
+                        "ubus": {
+                                "system": [ "reboot" ],
+				"uci": [ "set", "commit" ],
+				"krouter": [ "*" ]
+                        },
+                        "uci": [ "krouter" ]
+                },
+                "read": {
+                        "ubus": {
+                                "file": [ "read" ],
+				"iwinfo": [ "devices", "assoclist" ]
+                        }
+                }
+        },
+	"unauthenticated": {
+		"description": "Unauthenticated krouter access role",
+                "read": {
+                        "ubus": {
+				"uci": [ "get" ],
+				"krouter": [ "add_krouter_endpoint" ]
+			},
+                        "uci": [ "krouter" ]
+                }
+	}
+}

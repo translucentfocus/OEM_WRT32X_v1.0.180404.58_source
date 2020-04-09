@@ -1,0 +1,22 @@
+--- a/client.c
++++ b/client.c
+@@ -47,6 +47,7 @@ void uh_http_header(struct client *cl, i
+ 	struct http_request *r = &cl->request;
+ 	const char *enc = "Transfer-Encoding: chunked\r\n";
+ 	const char *conn;
++	const char *frame = "X-Frame-Options: SAMEORIGIN\r\n";
+ 
+ 	cl->http_code = code;
+ 
+@@ -58,9 +59,9 @@ void uh_http_header(struct client *cl, i
+ 	else
+ 		conn = "Connection: Keep-Alive";
+ 
+-	ustream_printf(cl->us, "%s %03i %s\r\n%s\r\n%s",
++	ustream_printf(cl->us, "%s %03i %s\r\n%s\r\n%s%s",
+ 		http_versions[cl->request.version],
+-		code, summary, conn, enc);
++		code, summary, conn, enc, frame);
+ 
+ 	if (!r->connection_close)
+ 		ustream_printf(cl->us, "Keep-Alive: timeout=%d\r\n", conf.http_keepalive);

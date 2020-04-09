@@ -1,0 +1,18 @@
+#!/bin/sh
+
+# Check linksys config for the firstboot
+firstboot=$(uci get linksys.@firmware[0].eula_accepted)
+
+if [[ $firstboot != 1 ]]; then
+	# Disable uhttpd https disable
+	uci set uhttpd.main.redirect_https='0'
+	uci commit uhttpd
+
+	eula=$(uci get linksys.@firmware[0].eula_accepted)
+	if [[ $eula == "0" ]]; then
+		uci add_list dhcp.@dnsmasq[0].address="/#/192.168.1.1"
+		uci commit dhcp
+	fi
+fi
+
+exit 0

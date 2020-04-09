@@ -1,0 +1,82 @@
+#!/bin/sh
+
+#
+# Required config
+#
+SERVICE="lil-ozker"
+
+# Expose the environment variables to lil-ozker
+set -a
+. ${STREAMBOOST_CFGDIR:=/etc/streamboost3}/rc.streamboost3
+
+START=60
+STOP=40
+
+# standard settings - accept overrides from the calling environment
+[ -z "$KROUTER_DEBUG_FILE" ] && KROUTER_DEBUG_FILE="/etc/krouter_debug"
+
+# Lil OzKer configuration items
+DAEMON_PORT=9000
+DAEMON_HOST=127.0.0.1
+EXTRA_COMMANDS=status
+
+# Format the command line parameters
+HTTPD_SYSCONF=${HTTPD_SYSCONF:-"/etc/httpd.conf"}
+HTTPD_CONF=${HTTP_CONF:-"httpd.conf"}
+
+OPTIONS_RUN="\
+--daemon \
+--port=$DAEMON_PORT \
+--host=$DAEMON_HOST \
+--run-dir=$RUNDIR \
+--pid-file=$PIDFILE \
+--uri-prefix=$URL_PREFIX"
+OPTIONS_DEBUG="--no-daemon --log-level=7"
+OPTIONS_DEBUG_INTERACTIVE="--debug-fastcgi"
+
+# $1: path to file
+check_httpd_conf() {
+	local conf=$1
+	if [ ! -e ${conf} ]; then
+	        echo '/cgi-bin/lil-ozker:root:$p$root' >>${conf}
+	fi
+	$(grep "lil-ozker" ${conf} >/dev/null 2>&1)
+	if [ $? -ne 0 ]; then
+	        echo '/cgi-bin/lil-ozker:root:$p$root' >>${conf}
+	fi
+}
+
+boot() {
+	if [ ! -d "$RUNDIR" ]; then
+		mkdir -p $RUNDIR
+	fi
+
+	if [ -n "$KROUTER_DEBUG_FILE" ] && [ -e "$KROUTER_DEBUG_FILE" ]; then
+		# debug file is present
+		echo "$SERVICE: booting in debug mode"
+		OPTIONS_RUN="$OPTIONS_RUN $OPTIONS_DEBUG"
+	fi
+
+	if [ "$OZKER_BASIC_AUTH" = "yes" ]; then
+		check_httpd_conf "${HTTPD_CONF}"
+		check_httpd_conf "${HTTPD_SYSCONF}"
+
+		sed -i -e 's/^[ \t]*#[ \t]\+option[ \t]\+realm[ \t]\+/\toption realm /;s/^[ \t]*#[ \t]\+option[ \t]\+config[ \t]\+/\toption config /' /etc/config/uhttpd
+		/etc/init.d/uhttpd restart
+	fi
+
+	start "$@"
+}
+
+shutdown() {
+	stop
+	if [ "$OZKER_BASIC_AUTH" = "yes" ]; then
+		[ -f ${HTTPD_SYSCONF} ] && sed -i -e '/^\/cgi-bin\/lil-ozker:root:.*/d' ${HTTPD_SYSCONF}
+		[ -f ${HTTPD_CONF} ] && sed -i -e '/^\/cgi-bin\/lil-ozker:root:.*/d' ${HTTPD_CONF}
+		sed -i -e 's/^[ \t]\+option[ \t]\+realm[ \t]\+/#\toption realm /;s/^[ \t]\+option[ \t]\+config[ \t]\+/#\toption config /' /etc/config/uhttpd
+		/etc/init.d/uhttpd restart
+		true
+	fi
+}
+
+action "$@"

@@ -1,0 +1,33 @@
+--- a/src/forward.c	2017-10-02 20:13:51.000000000 +0700
++++ b/src/forward.c_new	2017-11-28 17:29:09.302807339 +0700
+@@ -789,7 +789,7 @@
+ 
+   /* Note: if we send extra options in the EDNS0 header, we can't recreate
+      the query from the reply. */
+-  if (RCODE(header) == REFUSED &&
++  if (((RCODE(header) == REFUSED) || (RCODE(header) == NOTIMP) || (RCODE(header) == SERVFAIL)) &&
+       forward->forwardall == 0 &&
+       !(forward->flags & FREC_HAS_EXTRADATA))
+     /* for broken servers, attempt to send to another one. */
+@@ -1393,8 +1393,9 @@
+       if (detect_loop(daemon->namebuff, type))
+ 	return;
+ #endif
+-    }
+-  
++    } else if (OPCODE(header) == QSTATUS)
++        return;
++
+   if (find_pseudoheader(header, (size_t)n, NULL, &pheader, NULL, NULL))
+     { 
+       unsigned short flags;
+--- a/src/dns-protocol.h	2017-10-02 20:13:51.000000000 +0700
++++ b/src/dns-protocol.h_new	2017-11-28 17:29:11.794807391 +0700
+@@ -34,6 +34,7 @@
+ #define REFUSED		5		/* query refused */
+ 
+ #define QUERY           0               /* opcode */
++#define QSTATUS         2               /* opcode=2 */
+ 
+ #define C_IN            1               /* the arpa internet */
+ #define C_CHAOS         3               /* for chaos net (MIT) */

@@ -1,0 +1,137 @@
+#!/bin/sh
+
+#
+# Required config
+#
+SERVICE="nxstat"
+
+. ${STREAMBOOST_CFGDIR:=/etc/streamboost3}/rc.streamboost3
+. ${STREAMBOOST_CFGDIR:=/etc/streamboost3}/qos_constants.sh
+
+START=30
+STOP=70
+
+#
+# Environment config
+#
+# TODO: change to "BINDIR=${BINDIR:-"/usr/bin"}" when BINDIR
+# isn't explicitly set to /usr/sbin
+SB3_DEVNAME=${SB3_DEVNAME:-"/dev/nxlog"}
+MODNAME=${MODNAME:-"nexus"}
+SLEEP=10
+MAX_CACHE=512
+MAX_FLOW_LOG=100000
+ARCHIVE_FILE=${STAT_FILE:-"/tmp/streamboost3.stat.log"}
+FLOW_RULES_FILE=${STREAMBOOST_CFGDIR}/"flowclassifier.conf"
+POLICY_FILE=${STREAMBOOST_CFGDIR}/"policy.conf"
+SIG_VER_FILE=${RUNDIR}/"sig.ver"
+FLOW_LOG_FILE="/tmp/flow_log.log"
+HIDDEN_TAGS_FILE=${STREAMBOOST_CFGDIR}/"hidden_tags.conf"
+
+# Format the command line parameters
+OPTIONS_RUN="\
+-d \
+-p ${PIDFILE} \
+-f ${SB3_DEVNAME} \
+-s ${SLEEP} \
+-m ${MAX_CACHE} \
+-a ${ARCHIVE_FILE} \
+-i ${LAN_IFACE} \
+-e events;SENSOR_JOIN=ACCEPT \
+-e events;SENSOR_LEAVE=ACCEPT \
+-e stats;ROUTER_HEALTH=ACCEPT \
+-e stats;NETWORK_STATS=ACCEPT \
+-e stats;BW_STATS=ACCEPT \
+-e stats;DEV_STATS=ACCEPT \
+-e events;ROUTER_DESCRIPTION=ACCEPT \
+-e flows.events;FLOW_SUMMARY=ACCEPT \
+-e flows.events;TAG_SUMMARY=ACCEPT \
+-e events;SB_START=ACCEPT \
+-e stats;WIFI_STATION=ACCEPT \
+-e stats;WIFI_VAP=ACCEPT \
+-e stats;WIFI_NEIGHBOR=ACCEPT \
+--flow-rules-file=${FLOW_RULES_FILE} \
+--sig-ver-file=${SIG_VER_FILE} \
+--root-qdisc-id=${SB_HNDL_MAJ} \
+--flow-log-file=${FLOW_LOG_FILE} \
+--hidden-tags-file=${HIDDEN_TAGS_FILE} \
+--max-flow-log-size=${MAX_FLOW_LOG} \
+"
+
+#
+# Functions
+#
+is_nexus_enabled() {
+	is_nexus_installed || {
+		return 1
+	}
+	[ ! -e ${SB3_DEVNAME} ] && {
+		return 1
+	}
+	return 0
+}
+
+create_sig_ver_file() {
+	opkg info streamboost3-data | grep Version | cut -d' ' -f2- >${SIG_VER_FILE}
+}
+
+uuid_exists() {
+	streamboost3 get system.uuid >/dev/null
+}
+
+write_uuid() {
+        # Use the LAN_IFACE mac since it isn't usually user-configurable
+        # Use the cpu serial if available
+        # This UUID must be identical across reboots and updates
+        UUID=$({ ip addr show dev $LAN_IFACE | grep ether | awk '{print $2}' ; grep Serial /proc/cpuinfo | awk '{print $3}'; } | md5sum | awk '{print $1}')
+        UUID_VERSION=4
+        UUID_RESERVED=$(printf "%x" $((8 + 0x${UUID:16:1} % 4)))
+        UUID_STR=$(echo ${UUID:0:8}-${UUID:8:4}-${UUID_VERSION}${UUID:13:3}-${UUID_RESERVED}${UUID:17:3}-${UUID:20:12})
+        streamboost3 set system.uuid ${UUID_STR} >/dev/null
+}
+
+persist_on_sysupgrade() {
+	# if not already present, add our persist file to the
+	# /etc/sysupgrade.conf this will ensure the persisted
+	# values will remain through a sysupgrade.
+	grep -q "streamboost.persist" /etc/sysupgrade.conf
+	if [ $? != 0 ]; then
+		sb_logger 'Adding persist file to /etc/sysupgrade.conf'
+		echo "# streamboost3 persist file" >> /etc/sysupgrade.conf
+		echo "/etc/streamboost3/streamboost.persist" >> /etc/sysupgrade.conf
+	fi
+	return 0
+}
+
+start() {
+	echo -n "Initializing ${SERVICE}... "
+	is_nexus_enabled || {
+		echo "[ FAIL ]"
+		sb_logger "nexus is not enabled. Nxstat will not be started!"
+		return 1
+	}
+
+	create_sig_ver_file
+	uuid_exists || write_uuid
+	persist_on_sysupgrade
+
+	mkdir -p ${RUNDIR} >/dev/null 2>&1 || {
+		echo "[ FAIL ]"
+		return 2
+	}
+	echo "[ OK ]"
+
+	is_premium_mode || OPTIONS_RUN="${OPTIONS_RUN} --policy-file=${POLICY_FILE}"
+
+	if use_nss; then
+		OPTIONS_RUN="${OPTIONS_RUN} --use-nss"
+	fi
+
+	default_start "$@"
+}
+
+
+#
+# MAIN
+#
+action "$@"

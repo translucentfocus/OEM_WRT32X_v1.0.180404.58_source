@@ -1,0 +1,86 @@
+#!/bin/sh
+
+#
+# Required config
+#
+SERVICE="diki"
+
+. ${STREAMBOOST_CFGDIR:=/etc/streamboost3}/rc.streamboost3
+
+START=40
+STOP=60
+
+# The wireless command is defined in the streamboost3 init script
+WIFI_CRON_CMD="streamboost3 update_wifi_stats"
+DEVICETAB_TIMEOUT="*"
+
+OPTIONS_RUN="-d \
+-i ${LAN_IFACE} \
+--pid-file=${PIDFILE} \
+--use-syslog"
+
+##
+# Return information about the deviceclassifier package
+#
+info() {
+	echo "${SERVICE} info"
+	PKGNAME="deviceclassifier"
+	default_info_disk "$@"
+	default_info_memory "$@"
+	default_info_cpu "$@"
+}
+
+##
+# Setup the crontab job to execute based on the specified number of minutes.
+# The default timeout is 1 minute unless otherwise specified in the
+# persistence file.
+#
+start() {
+	echo -n "Setting up ${SERVICE}... "
+	local retval=0
+	local timeout="$(streamboost3 get devicetab.timeout)"
+	if [ "$?" != "0" ]; then
+		timeout="${DEVICETAB_TIMEOUT}"
+		streamboost3 set "devicetab.timeout=${timeout}"
+	fi
+
+	if [ is_premium_mode = true ]; then
+		# All wireless device statistics are handled by a single command in
+		# the streamboost3 init script
+		if ! find_in_cron "${WIFI_CRON_CMD}"; then
+			local cron_cmd=$(build_cron "${WIFI_CRON_CMD}" "*" "${timeout}")
+			add_to_cron "${cron_cmd}"
+			retval=$?
+		fi
+		[ ${retval} -eq 0 ] || {
+			echo "[ FAIL ]"
+			return ${retval}
+		}
+	fi
+
+	echo "[  OK  ]"
+
+	default_start "$@"
+}
+
+##
+# Once we've stopped diki then proceed to remove the cron command.
+#
+stop() {
+	local retval=0
+
+	default_stop "$@"
+
+	echo -n "Removing ${SERVICE}... "
+	if [ is_premium_mode = true ]; then
+		remove_from_cron "${WIFI_CRON_CMD}"
+	fi
+	retval=$?
+	[ ${retval} -eq 0 ] && echo "[  OK  ]" || echo "[ FAIL ]"
+	return ${retval}
+}
+
+#
+# MAIN
+#
+action "$@"

@@ -1,0 +1,15 @@
+#!/bin/sh /etc/rc.common
+
+START=10
+USE_PROCD=1
+
+start_service() {
+	procd_open_instance connled
+	procd_set_param command /sbin/connled -b -a
+	procd_set_param respawn ${respawn_threshold:-360} ${respawn_timeout:-5} ${respawn_retry:-5}
+	procd_close_instance
+}
+
+stop_service() {
+	killall connled
+}

@@ -1,0 +1,129 @@
+#!/bin/sh
+
+#
+# Required config
+#
+SERVICE="nexus"
+BINARY="nexus"
+
+. ${STREAMBOOST_CFGDIR:=/etc/streamboost3}/rc.streamboost3
+
+SB3_DEVNAME="/dev/nxlog"
+
+START=10
+STOP=90
+
+start() {
+	echo -n "Starting ${SERVICE}... "
+
+	is_nexus_installed || {
+		echo "[ FAIL ]"
+		sb_logger "kernel module not installed! Please boot first!"
+		return 1
+	}
+
+	if use_nss; then
+		echo 1 >/proc/nexus/nss_mark
+	else
+		echo 0 >/proc/nexus/nss_mark
+	fi
+
+	echo "[ OK ]"
+	return 0
+}
+
+# Stop is just a stub for now
+stop() {
+	return 0
+}
+
+shutdown() {
+	local retval=0
+	echo -n "Shutting down ${SERVICE}... "
+	rm -f ${SB3_DEVNAME}
+
+	rmmod ${BINARY} >/dev/null 2>&1
+	retval=$?
+	if [ ! ${retval} = 0 ]; then
+		echo "[ FAIL ]"
+		sb_logger "could not remove ${BINARY} module."
+		return ${retval}
+	fi
+	echo "[ OK ]"
+	return 0
+}
+
+status() {
+	local state=0 enabled=0
+	# Check if we are enabled
+	enabled 1>/dev/null && {
+		enabled=1
+	}
+	! is_nexus_installed || {
+		state=1
+	}
+	if [ $state = 1 -a ! -e ${SB3_DEVNAME} ]; then
+		state=2
+	fi
+
+	# return if the --verbose flag was not set and disabled and not running
+	if [ -z "$VERBOSE" -a $enabled = 0 -a $state = 0 ]; then
+		return 0
+	fi
+
+	# If the verbose flag is set then echo our enabled state
+	if [ "$VERBOSE" = "yes" ]; then
+		[ $enabled = 0 ] && echo -n "[ DISABLED ]" || echo -n "[ ENABLED ]"
+	fi
+
+	# ehco our current state
+	if [ $state = 1 ]; then
+		echo "[  UP  ] ${SERVICE} is running."
+	elif [ $state = 2 ]; then
+		echo "[ DOWN ] ${SERVICE} is turned off."
+	else
+		echo "[ DOWN ] ${SERVICE} is not installed."
+	fi
+}
+
+boot() {
+	local retval=0
+	is_nexus_installed || {
+		echo -n "Installing ${BINARY} module... "
+		insmod_ko ${BINARY} >/dev/null 2>&1
+		retval=$?
+		[ ! ${retval} = 0 ] && {
+			echo "[ FAIL ]"
+			sb_logger "insmod failed with code ${retval}"
+			return ${retval}
+		}
+		echo "[ OK ]"
+	}
+
+	if [ ! -e ${SB3_DEVNAME} ]; then
+		echo -n "Creating ${SERVICE} log: ${SB3_DEVNAME}... "
+		local major=$(cat /proc/devices | grep nexus | awk '{ print $1 }')
+		#set up log file
+		mknod ${SB3_DEVNAME} c ${major} 0 >/dev/null 2>&1
+		retval=$?
+		if [ ! $retval = 0 ]; then
+			echo "[ FAIL ]"
+			sb_logger "mknod failed with code ${retval}"
+			return $retval
+		fi
+		echo "[ OK ]"
+	fi
+
+	start "$@"
+}
+
+info() {
+	echo "${SERVICE} info"
+	PKGNAME="kmod-nexus"
+	default_info_disk "$@"
+}
+
+#
+# MAIN
+#
+action "$@"

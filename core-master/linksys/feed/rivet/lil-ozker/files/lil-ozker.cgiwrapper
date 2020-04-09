@@ -1,0 +1,38 @@
+#!/bin/sh
+
+KEYWORD="streamboost3"
+MAINMENU='"'$KEYWORD'":{"link":{"uri":"/api/'$KEYWORD'","rel":"/api/help/'$KEYWORD'"}}'
+ITEMTEMPLATE='"%s":{"link":{"uri":"/api/'$KEYWORD'/%s","rel":"/api/help/'$KEYWORD'/%s"}}'
+VERBOSE=""
+COMMASEP=""
+
+REQUEST_TREE=${REQUEST_URI#*api}
+case "${REQUEST_TREE%\?*}" in
+	"")
+		/usr/bin/cgi-fcgi -bind -connect 127.0.0.1:9000 | sed 's|}$|,'"$MAINMENU"'}|'
+		;;
+	/$KEYWORD|/$KEYWORD/)
+		echo Content-type: application/json
+		echo
+		COMMASEP='{'
+		for cmd in $(streamboost3 listcmd); do
+			printf "${COMMASEP}${ITEMTEMPLATE}" "$cmd" "$cmd" "$cmd"
+			COMMASEP=','
+		done
+		echo '}'
+		;;
+	/$KEYWORD/*)
+		COMMAND=${REQUEST_TREE%\?*}
+		CHOP=$(echo "$QUERY_STRING" | sed 's/%20/ /;s/&/\n/')
+		echo "$CHOP" | grep >/dev/null "^verbose=true$" && VERBOSE="--verbose"
+		echo "$CHOP" | grep >/dev/null "^debug=true$" && export DEBUG=1
+		PARAMS=$(echo "$CHOP" | grep "^params=" | cut -d = -f 2-)
+		echo Content-type: text/plain
+		echo
+		streamboost3 2>&1 $VERBOSE "${COMMAND#/$KEYWORD/}" $PARAMS
+		echo Return code: $?
+		;;
+	*)
+		/usr/bin/cgi-fcgi -bind -connect 127.0.0.1:9000
+		;;
+esac

@@ -1,0 +1,164 @@
+Index: uhttpd-2016-10-05/file.c
+===================================================================
+--- uhttpd-2016-10-05.orig/file.c
++++ uhttpd-2016-10-05/file.c
+@@ -29,6 +29,9 @@
+ #include <inttypes.h>
+ 
+ #include <libubox/blobmsg.h>
++#include <uci.h>
++
++#include <stdio.h>
+ 
+ #include "uhttpd.h"
+ #include "mimetypes.h"
+@@ -72,6 +75,40 @@ void uh_index_add(const char *filename)
+ 	list_add_tail(&idx->list, &index_files);
+ }
+ 
++static char *get_uci_option(struct uci_context *ctx, struct uci_package *package, const char *opt)
++{
++    struct uci_section *section;
++    struct uci_element *element;
++    struct uci_element *section_element;
++    struct uci_option  *option;
++    char *option_value = 0;
++
++    if (uci_load(ctx, "linksys", &package)  != UCI_OK ) {
++        return NULL;
++    }
++
++    uci_foreach_element(&package->sections, element)
++    {
++        section = uci_to_section(element);
++
++        if (!strcmp(section->type, "firmware")) {
++            uci_foreach_element(&section->options, section_element) {
++                option = uci_to_option(section_element);
++                if(!strcmp(option->e.name, opt)){
++					option_value = option->v.string;
++					break;
++				}
++			}
++
++		}
++    }
++
++    uci_unload(ctx, package);
++
++    return (char *) option_value;
++
++}
++
+ static char * canonpath(const char *path, char *path_resolved)
+ {
+ 	const char *path_cpy = path;
+@@ -144,10 +181,12 @@ uh_path_lookup(struct client *cl, const
+ 	struct stat s;
+ 	struct index_file *idx;
+ 
++
+ 	/* back out early if url is undefined */
+ 	if (url == NULL)
+ 		return NULL;
+ 
++
+ 	memset(&p, 0, sizeof(p));
+ 	path_phys[0] = 0;
+ 	path_info[0] = 0;
+@@ -230,6 +269,61 @@ uh_path_lookup(struct client *cl, const
+ 		pathptr++;
+ 	}
+ 
++	/**** handle redirects based on the uci config ****/
++	struct uci_context *ctx = uci_alloc_context();
++	struct uci_package *package = NULL;
++
++    int rem;
++    struct blob_attr *cur;
++    char *cur_url = NULL, *host = NULL;
++
++    blob_for_each_attr(cur, cl->hdr.head, rem) {
++        if (!strcmp(blobmsg_name(cur), "host"))
++            host = blobmsg_get_string(cur);
++
++        if (!strcmp(blobmsg_name(cur), "URL"))
++            cur_url = blobmsg_get_string(cur);
++
++        if (cur_url && host)
++            break;
++    }
++
++	/* poor-man's way of getting the IP of lan */
++	FILE *sh;
++	char lan[15 + 1] = {0};
++	sh = popen(". /lib/functions/network.sh; network_get_ipaddr ip lan; echo $ip", "r");
++	fgets(lan, 15 + 1, sh);
++
++	size_t ln = strlen(lan) - 1;
++		if (*lan && lan[ln] == '\n')
++	   		lan[ln] = '\0';
++
++	pclose(sh);
++
++	/* check if eula is set, get redirect option */
++	char *eula = get_uci_option(ctx, package, "eula_accepted");
++	char wizard[128] = {0};
++	sprintf(wizard, "%s/#!/wizard", lan);
++
++	/* redirect is indicated as 1, so do the redirect, set eula temoprary to 2 */
++	if(!(strcmp(eula, "0"))) {
++		if (!(!(strcmp(host, lan)) || !(strcmp(host, wizard)))){
++			/* redirect */
++			uh_http_header(cl, 302, "Found");
++			ustream_printf(cl->us, "Content-Length: 0\r\n");
++			ustream_printf(cl->us, "Location: http://%s/#!/wizard\r\n\r\n",  lan);
++			ustream_printf(cl->us, "Connection: close\r\n");
++			uh_request_done(cl);
++			/* clean up */
++			uci_free_context(ctx);
++			p.redirected = true;
++			return &p;
++		}
++	}
++	/* clean up */
++	uci_free_context(ctx);
++	/**** redirected if needed ****/
++
+ 	/* if requested url resolves to a directory and a trailing slash
+ 	   is missing in the request url, redirect the client to the same
+ 	   url with trailing slash appended */
+@@ -246,6 +340,7 @@ uh_path_lookup(struct client *cl, const
+ 		return &p;
+ 	}
+ 
++
+ 	/* try to locate index file */
+ 	len = path_phys + sizeof(path_phys) - pathptr - 1;
+ 	list_for_each_entry(idx, &index_files, list) {
+Index: uhttpd-2016-10-05/uhttpd.h
+===================================================================
+--- uhttpd-2016-10-05.orig/uhttpd.h
++++ uhttpd-2016-10-05/uhttpd.h
+@@ -24,6 +24,7 @@
+ #include <limits.h>
+ #include <dirent.h>
+ 
++#include <uci.h>
+ #include <libubox/list.h>
+ #include <libubox/uloop.h>
+ #include <libubox/ustream.h>
+Index: uhttpd-2016-10-05/CMakeLists.txt
+===================================================================
+--- uhttpd-2016-10-05.orig/CMakeLists.txt
++++ uhttpd-2016-10-05/CMakeLists.txt
+@@ -34,7 +34,8 @@ ENDIF()
+ 
+ ADD_EXECUTABLE(uhttpd ${SOURCES})
+ FIND_LIBRARY(libjson NAMES json-c json)
+-TARGET_LINK_LIBRARIES(uhttpd ubox dl json_script blobmsg_json ${libjson} ${LIBS})
++FIND_LIBRARY(libuci NAMES uci)
++TARGET_LINK_LIBRARIES(uhttpd ubox dl json_script blobmsg_json ${libjson} ${libuci} ${LIBS})
+ 
+ SET(PLUGINS "")
+ IF(LUA_SUPPORT)

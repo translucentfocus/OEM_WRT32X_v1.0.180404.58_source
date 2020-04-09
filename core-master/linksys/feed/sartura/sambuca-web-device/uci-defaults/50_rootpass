@@ -1,0 +1,12 @@
+#!/bin/sh
+
+# Check linksys config for the firstboot
+firstboot=$(uci get linksys.@firmware[0].eula_accepted)
+
+if [[ $firstboot != 1 ]]; then
+	ROOTPASS="admin"
+	echo -e "$ROOTPASS\n$ROOTPASS\n" | passwd
+fi
+
+exit 0
+

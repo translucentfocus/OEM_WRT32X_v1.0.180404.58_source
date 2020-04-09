@@ -1,0 +1,172 @@
+Index: uclient-2016-01-28/uclient-fetch.c
+===================================================================
+--- uclient-2016-01-28.orig/uclient-fetch.c
++++ uclient-2016-01-28/uclient-fetch.c
+@@ -28,6 +28,7 @@
+ #include <stdint.h>
+ #include <inttypes.h>
+ #include <signal.h>
++#include <string.h>
+ 
+ #include <libubox/blobmsg.h>
+ 
+@@ -41,7 +42,18 @@
+ #define LIB_EXT "so"
+ #endif
+ 
++typedef struct {
++	char *name;
++	char *value;
++} header_t;
++
++typedef struct {
++	header_t *headers;
++	unsigned int count;
++} custom_headers_t;
++
+ static const char *user_agent = "uclient-fetch";
++static custom_headers_t custom_headers; // = { .headers = NULL, .count = 0 };
+ static const char *post_data;
+ static struct ustream_ssl_ctx *ssl_ctx;
+ static const struct ustream_ssl_ops *ssl_ops;
+@@ -74,6 +86,28 @@ static void pmt_update(struct uloop_time
+ 	uloop_timeout_set(t, 1000);
+ }
+ 
++static void add_custom_header(const char *header_str) {
++	printf("Adding custom header: %s", header_str);
++	const char delim = ':';
++
++	custom_headers.count++;
++	custom_headers.headers = realloc(custom_headers.headers, custom_headers.count);
++
++	const char *split_point = strchr(header_str, delim);
++	unsigned int key_len = split_point - header_str;
++	split_point++;
++	unsigned int value_len = strlen(split_point);
++
++	header_t new_header = {
++		.name = calloc(key_len + 1, sizeof(char)),
++		.value = calloc(value_len + 1, sizeof(char))
++	};
++
++	strncpy(new_header.name, header_str, key_len);
++	strncpy(new_header.value, split_point, value_len);
++	custom_headers.headers[custom_headers.count - 1] = new_header;
++}
++
+ static const char *
+ get_proxy_url(char *url)
+ {
+@@ -332,11 +366,26 @@ static int init_request(struct uclient *
+ 	if (cur_resume)
+ 		check_resume_offset(cl);
+ 
++	bool skip_content_type = false;
++
++	printf("# custom headers to add: %d\n", custom_headers.count);
++	for (int i = 0; i < custom_headers.count; i++) {
++		header_t header = custom_headers.headers[i];
++		printf("Adding %s: %s\n", header.name, header.value);
++		uclient_http_set_header(cl, header.name, header.value);
++
++		if (strcmp("Content-Type", header.name) == 0) {
++			skip_content_type = true;
++		}
++	}
++
+ 	if (post_data) {
+-		uclient_http_set_header(cl, "Content-Type", "application/x-www-form-urlencoded");
++		if (!skip_content_type)
++			uclient_http_set_header(cl, "Content-Type", "application/x-www-form-urlencoded");
+ 		uclient_write(cl, post_data, strlen(post_data));
+ 	}
+ 
++
+ 	rc = uclient_request(cl);
+ 	if (rc)
+ 		return rc;
+@@ -497,6 +546,7 @@ enum {
+ 	L_USER,
+ 	L_PASSWORD,
+ 	L_USER_AGENT,
++	L_HEADER,
+ 	L_POST_DATA,
+ 	L_SPIDER,
+ 	L_TIMEOUT,
+@@ -511,6 +561,7 @@ static const struct option longopts[] =
+ 	[L_USER] = { "user", required_argument },
+ 	[L_PASSWORD] = { "password", required_argument },
+ 	[L_USER_AGENT] = { "user-agent", required_argument },
++	[L_HEADER] = { "header", required_argument },
+ 	[L_POST_DATA] = { "post-data", required_argument },
+ 	[L_SPIDER] = { "spider", no_argument },
+ 	[L_TIMEOUT] = { "timeout", required_argument },
+@@ -538,7 +589,7 @@ int main(int argc, char **argv)
+ 	signal(SIGPIPE, SIG_IGN);
+ 	init_ustream_ssl();
+ 
+-	while ((ch = getopt_long(argc, argv, "46cO:P:qsT:U:Y:", longopts, &longopt_idx)) != -1) {
++	while ((ch = getopt_long(argc, argv, "46cO:P:qsT:U:H:Y:", longopts, &longopt_idx)) != -1) {
+ 		switch(ch) {
+ 		case 0:
+ 			switch (longopt_idx) {
+@@ -623,6 +674,9 @@ int main(int argc, char **argv)
+ 			if (strcmp(optarg, "on") != 0)
+ 				proxy = false;
+ 			break;
++		case 'H':
++			add_custom_header(optarg);
++			break;
+ 		default:
+ 			return usage(progname);
+ 		}
+Index: uclient-2016-01-28/uclient-http.c
+===================================================================
+--- uclient-2016-01-28.orig/uclient-http.c
++++ uclient-2016-01-28/uclient-http.c
+@@ -564,8 +564,8 @@ uclient_http_send_headers(struct uclient
+ 	blobmsg_for_each_attr(cur, uh->headers.head, rem)
+ 		ustream_printf(uh->us, "%s: %s\r\n", blobmsg_name(cur), (char *) blobmsg_data(cur));
+ 
+-	if (uh->req_type == REQ_POST || uh->req_type == REQ_PUT)
+-		ustream_printf(uh->us, "Transfer-Encoding: chunked\r\n");
++	// if (uh->req_type == REQ_POST || uh->req_type == REQ_PUT)
++	// 	ustream_printf(uh->us, "Transfer-Encoding: chunked\r\n");
+ 
+ 	uclient_http_add_auth_header(uh);
+ 
+@@ -972,14 +972,20 @@ uclient_http_send_data(struct uclient *c
+ 	if (uh->state >= HTTP_STATE_REQUEST_DONE)
+ 		return -1;
+ 
++	char length[6] = { 0 };
++	sprintf(length, "%d", len);
++
++	uclient_http_set_header(cl, "Content-Length", length);
+ 	uclient_http_send_headers(uh);
+ 
+ 	if (len > 0) {
+-		ustream_printf(uh->us, "%X\r\n", len);
++		// ustream_printf(uh->us, "%X\r\n", len);
+ 		ustream_write(uh->us, buf, len, false);
+-		ustream_printf(uh->us, "\r\n");
++		// ustream_printf(uh->us, "\r\n");
+ 	}
+ 
++	// printf("us: %s\n", uh->us->w.data_tail);
++
+ 	return len;
+ }
+ 
+@@ -992,8 +998,8 @@ uclient_http_request_done(struct uclient
+ 		return -1;
+ 
+ 	uclient_http_send_headers(uh);
+-	if (uh->req_type == REQ_POST || uh->req_type == REQ_PUT)
+-		ustream_printf(uh->us, "0\r\n\r\n");
++	// if (uh->req_type == REQ_POST || uh->req_type == REQ_PUT)
++	// 	ustream_printf(uh->us, "0\r\n\r\n");
+ 	uh->state = HTTP_STATE_REQUEST_DONE;
+ 
+ 	return 0;

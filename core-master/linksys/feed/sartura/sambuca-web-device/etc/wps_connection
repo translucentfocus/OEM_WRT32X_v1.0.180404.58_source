@@ -1,0 +1,36 @@
+#!/bin/sh
+
+# Check for status file
+[ -f "/tmp/wps_status" ] && echo > /tmp/wps_status || touch /tmp/wps_status
+
+# Refresh clients list
+$(ubus call attdev get &> /dev/null)
+
+# Try to get client MAC
+[ -f "/var/run/hostapd_wps_pin_requests" ] && client_mac="$(cat /var/run/hostapd_wps_pin_requests | awk '{print $3}' | tail -1)"
+
+# If pin_request file doesn't exist, check for disassociated devices in log
+[ -z "$client_mac" ] && client_mac="$(logread | grep disassociated | tail -1 | awk '{print $10}')"
+
+wps_timeout=120
+wps_time=0
+wps_status="timeout"
+
+while [ "$wps_time" -lt "$wps_timeout" ]; do
+	# Make sure client mac is available
+	if [ -z "$client_mac" ]; then
+		[ -f "/var/run/hostapd_wps_pin_requests" ] && client_mac="$(cat /var/run/hostapd_wps_pin_requests | awk '{print $3}' | tail -1)"
+		[ -z "$client_mac" ] && client_mac="$(logread | grep disassociated | tail -1 | awk '{print $10}')"
+	fi
+
+	$(ubus call attdev get &> /dev/null)
+	sleep 5
+	client_connected="$(grep -wo $client_mac /tmp/neighlist)"
+
+	# Avoid false-positive client recognition
+	[ "$(grep -wo $client_mac /tmp/neighlist | awk '{print $4}')" == "wired" ] && client_connected=""
+	wps_time=$((wps_time+5))
+	[ ! -z "$client_connected" ] && wps_status="success" && break
+done
+
+echo $wps_status > /tmp/wps_status

@@ -1,0 +1,27 @@
+#!/bin/sh
+
+. /lib/functions.sh
+
+case "$ACTION" in
+pressed)
+	return 5
+;;
+timeout)
+	. /etc/diag.sh
+	set_state failsafe
+;;
+released)
+	if [ "$SEEN" -gt 4 -a "$SEEN" -lt 10 ]
+	then
+		echo "REBOOT" > /dev/console
+		sync
+		reboot
+	elif [ "$SEEN" -gt 9 ]
+	then
+		echo "FACTORY RESET" > /dev/console
+		jffs2reset -y && reboot &
+	fi
+;;
+esac
+
+return 0

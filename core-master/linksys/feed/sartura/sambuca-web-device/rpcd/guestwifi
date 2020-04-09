@@ -1,0 +1,67 @@
+#!/bin/sh
+
+case "$1" in
+        list)
+                echo '{ "set":{} }'
+        ;;
+        call)
+		case "$2" in
+			set)
+				main_ints="$(uci show wireless | grep bssid | cut -d '.' -f1,2)"
+				guest_ints="$(uci show wireless | grep -w "_guest" | cut -d '.' -f1,2)"
+				ifc_bssids="$(ifconfig | grep wdev* | awk '{print $5}' | uniq)"
+
+				for x in $main_ints; do
+					int_radio="$(uci -q get $x.device)"
+					for y in $guest_ints; do
+					guest_radio="$(uci -q get $y.device)"
+
+					# Find guest interface for the current radio device
+					[ "$int_radio" == "$guest_radio" ] && \
+					x_interface="$y"
+				done
+
+				bssid_total=$(ifconfig | grep wdev[0-9]ap* | awk '{print $5}' | wc -l)
+				bssid_uniq=$(ifconfig | grep wdev[0-9]ap* | awk '{print $5}' | uniq | wc -l)
+
+				[ "$bssid_total" != "$bssid_uniq" ] && bssid_update="1"
+
+				if [ -z "$(uci -q get $x_interface.bssid)" -o ! -z "$bssid_update" ]; then
+
+				# Get current bssid for the interface
+				x_bssid="$(uci -q get $x.bssid)"
+				bssid_lc="$(echo $x_bssid | sed -e "s/^.*\(.\)$/\1/")"
+
+				while [ "$(ifconfig | grep wdev* | grep $x_bssid)" -o "$(uci show wireless | grep $x_bssid)" ]; do
+
+					# If char, turn into hex
+					case "$bssid_lc" in
+						*[!0-9]*)
+							bssid_lc="$(printf '%d' 0x${bssid_lc})"
+						;;
+					esac
+
+					bssid_lc=$((bssid_lc+1))
+
+					# Return back to char if neeed
+					if [ "$bssid_lc" -ge "9" -a "$bssid_lc" -lt "15" ]; then
+						bssid_lc="$(printf '%X' ${bssid_lc})"
+					elif [ "$bssid_lc" -ge "15" ]; then
+						bssid_lc="1"
+					fi
+
+					bssid_update="$(echo $x_bssid | sed s'/.$//')"
+					x_bssid="$(echo $bssid_update$bssid_lc)"
+
+				done
+
+				uci set $x_interface.bssid=$x_bssid
+				uci commit wireless
+
+				fi; done
+
+				printf '{ "values": { "status":"ok" }}'
+			;;
+		esac
+	;;
+esac

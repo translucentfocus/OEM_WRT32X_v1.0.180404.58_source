@@ -1,0 +1,316 @@
+#!/bin/sh
+
+# Create lock file
+[ ! -f "/tmp/usb.lock" ] && touch /tmp/usb.lock || exit 0
+
+# Get array of attached devices
+usb_dev="$(cat /proc/partitions | awk '{if ($1 == "8") print $4;}' | grep -wo '[^0-9]*')"
+
+mount_flags(){
+
+  # Check the filesystem and check mount options
+  if [[ $fstype == "ext3" ]] || [[ $fstype == "ext4" ]]; then flags="ext4 -o rw,noatime,nodiratime"
+    elif [[ $fstype == "vfat" ]]; then flags="vfat -o umask=000,dmask=000,fmask=000,uid=65534,gid=655,iocharset=utf8,flush,sync"
+    elif [[ $fstype == "ntfs" ]]; then flags="ntfs-3g -o rw,big_writes,sync"
+    elif [[ $fstype == "hfsplus" ]]; then flags="hfsplus -o force,rw"
+    else logger -t "$0" "/dev/${x}${y} - Filesystem $fstype is not supported"
+  fi
+
+}
+
+led_handling(){
+	# Set LED trigger value
+	if [ "$usb_port" == "ata2" ]; then led_trigger='system.led_esata.trigger'
+	elif [ "$usb_port_num" == "1" ]; then led_trigger='system.led_usb2.trigger'
+	elif [ "$usb_port_num" == "2" ]; then led_trigger='system.led_usb3_1.trigger'
+	elif [ "$usb_port_num" == "3" ]; then led_trigger='system.led_usb3_1.trigger'
+	fi
+}
+
+usb_mount(){
+
+# If called from rpcd, check only the provided value
+if [ ! -z "$rpcd_usb" ]; then
+  for x in $usb_dev; do
+	usb_port="$(du -hx /sys/devices/platform/soc/soc:internal-regs/ | grep ${x} | cut -d '/' -f8 | tail -1)"
+	[ "$usb_port" == "usb3" ] && usb_port="usb2"
+	if [ "$rpcd_usb" == "$usb_port" ]; then
+		usb_dev="${x}"
+		break
+	else
+		usb_dev=""
+	fi
+  done
+fi
+
+if [ -z "$usb_dev" ]; then
+	[ -f "/tmp/usb.lock" ] && rm /tmp/usb.lock
+	exit 0
+fi
+
+for x in $usb_dev; do
+
+  # Create general drive configuration
+  usb_port="$(du -hx /sys/devices/platform/soc/soc:internal-regs/ | grep ${x} | cut -d '/' -f8 | tail -1)"
+  usb_port_num="$(echo ${usb_port} | cut -c4)"
+  usb_path="$(du -hx /sys/devices/platform/soc/soc:internal-regs/ | grep ${usb_port}/${usb_port_num}-0:1.0 | tail -1 | awk '{print $2}')"
+  [ "$usb_port" = "ata2" ] && usb_path="$(du -hx /sys/devices/platform/soc/soc:internal-regs/ | grep ata2/host1/target1:0:0/1:0:0:0  | tail -1 | awk '{print $2}')"
+
+  # Validate the json output, this might get corrupted in strange characters are used in labeling
+  $(lsblk /dev/${x} -Jf | jsonfilter -qe '@.blockdevices[*]' &> /dev/null)
+  if [ "$?" == "0" ]; then
+    usb_label="$(lsblk /dev/${x} -Jf | jsonfilter -e '@.blockdevices[*].label')"
+    usb_json=1
+  else
+    usb_label="$(lsblk /dev/${x} -rf | grep -w ${x} | awk '{print $3}')"
+    usb_json=0
+  fi
+
+  # Since naming is optional, we have to cover the case if the label does not exist
+  [ -z "$usb_label" ] && usb_label="unknown"
+
+  # Trigger led as soon as possible
+  # eSATA device use USB port 1
+  led_handling
+  led_state="$(uci -q get sambuca.sambuca.led)"
+
+  if [ "$led_state" == "1" ]; then
+    uci set $led_trigger='default-on'
+  fi
+
+  uci commit system
+  /etc/init.d/led restart > /dev/null
+
+  # Check if USB 3.0
+  [ "$usb_port" == "usb3" ] && usb_port=usb2
+
+  if [ ! "$(uci -q get usbconf.@${usb_port}[-1])" ]; then
+	  uci -q add usbconf "${usb_port}"
+	  uci set usbconf.@${usb_port}[-1].device="$x"
+	  uci set usbconf.@${usb_port}[-1].path="$usb_path"
+	  uci set usbconf.@${usb_port}[-1].label="$usb_label"
+	  uci set usbconf.@${usb_port}[-1].led="$led_trigger"
+	  uci set usbconf.@${usb_port}[-1].mounted='1'
+  fi
+
+  # Get only partitions for the current device
+  usb_part="$(ls /dev/$x* | grep -o '[0-9]*')"
+
+    for y in $usb_part; do
+      # Get info depending on json validity
+      if [ "$usb_json" == "1" ]; then
+	# Get info (json)
+        name="$(lsblk /dev/$x* -Jf | jsonfilter -e '@.blockdevices['$y'].name')"
+        fstype="$(lsblk /dev/$x* -Jf | jsonfilter -e '@.blockdevices['$y'].fstype')"
+        uuid="$(lsblk /dev/$x* -Jf | jsonfilter -e '@.blockdevices['$y'].uuid')"
+        mountpoint="$(lsblk /dev/$x* -Jf | jsonfilter -e '@.blockdevices['$y'].mountpoint')"
+	label="$(lsblk /dev/$x* -Jf | jsonfilter -e '@.blockdevices['$y'].label')"
+      else
+	# Get info (legacy)
+	name="$(lsblk /dev/$x -rf | grep -w ${x}${y} | awk '{print $1}')"
+	fstype="$(lsblk /dev/$x -f | grep -w ${x}${y} | awk '{print $2}')"
+	label="$(lsblk /dev/$x -f | grep -w ${x}${y} | awk '{print $3}')"
+	uuid="$(lsblk /dev/$x -f | grep -w ${x}${y} | awk '{print $4}')"
+	mountpoint="$(lsblk /dev/$x -rf | grep -w ${x}${y} | awk '{print $5}')"
+      fi
+
+	parttype="$(lsblk /dev/${x}${y} -no PARTTYPE | awk '{print toupper($0)}')"
+
+	# If there is no label, use device name
+	[ -z "$label" ] && label="$name"
+
+	# If mountpoint doesn't exist, mount the partition. Also check if EFI partition
+	if [ -z "$mountpoint" ]; then
+
+	  case "$parttype" in
+		0XEF|C12A7328-F81F-11D2-BA4B-00A0C93EC93B)
+			logger -t "$0" "/dev/$name is EFI partition, skipping mount"
+		;;
+		*)
+		    # Check if invalid
+		    if [ ! -z "$fstype" ]; then
+			mount_flags
+			if [[ ! -z $flags ]]; then
+
+			  # If fstype is hfs* with journaling enabled, perform fsck to be able to mount the volume as rw
+			  if [ "$fstype" == "hfsplus" ]; then
+				fsck.hfs /dev/$name &> /dev/null
+			  	[ "$(echo $?)" != "0" ] && return_code="-1"
+			 	fsck.hfs -q /dev/$name &> /tmp/hfscheck
+			  fi
+
+			  [ "$fstype" == "vfat" ] && fsck.fat -a /dev/$name &> /dev/null
+			  [ "$(echo $?)" != "0" ] && return_code="-1"
+
+			  # Create "real" mount point
+			  mkdir -p "/mnt/$name"
+			  mount -t $flags /dev/$name "/mnt/$name"
+			  # Some filesystems/services require full rw permissions
+			  chmod 777 "/mnt/$name"
+
+			  # If device is mounted, set ownership to nobody and group to ftp.
+			  [ ! -z "$(df | grep /dev/${name})" ] && chown -R nobody:ftp /mnt/$name 2> /dev/null
+			  [ "$?" != "0" ] && logger -t "$0" "Permission error, /dev/${name} seems to be read-only"
+
+			  # Create "label" mount
+			  mkdir -p "/usbconf/$label"
+			  mount -r "/mnt/$name" "/usbconf/$label"
+
+			fi
+		    else
+			  logger -t "$0" "Cannot find filesystem for /dev/${name}, marking it as invalid partition"
+		fi
+
+		[ "$(mount | grep /dev/${name} | awk '{print $1}' | uniq)" ] && valid="1" || valid="0"
+
+		# Write partitions in config
+		if [ ! "$(uci -q get usbconf.@${usb_port}-${y}[-1])" -a "$parttype" != "0xef" ]; then
+			uci -q add usbconf "${usb_port}-${y}"
+			uci set usbconf.@${usb_port}-${y}[-1].device="$name"
+			uci set usbconf.@${usb_port}-${y}[-1].label="$label"
+			uci set usbconf.@${usb_port}-${y}[-1].fstype="$fstype"
+			uci set usbconf.@${usb_port}-${y}[-1].valid="$valid"
+
+			if [ -f "/tmp/hfscheck" ]; then
+				hfs_status=$(cat /tmp/hfscheck | grep FILESYSTEM | awk '{print $NF}')
+				[ "$hfs_status" == "DIRTY" ] && uci set usbconf.@${usb_port}-${y}[-1].valid="0"
+				rm /tmp/hfscheck
+			fi
+		fi
+		;;
+	    esac
+	fi
+
+  done
+  [ "$usb_port" = "ata2" ] && usb_port="usb1"
+[ -f "/tmp/detect_${usb_port}" ] && rm "/tmp/detect_${usb_port}"
+done
+
+# Save configuration
+uci commit usbconf
+
+[ "$(ls /etc/rc.d/ | grep samba | cut -c 1)" == "S" ] && /etc/init.d/samba start
+[ "$(ls /etc/rc.d/ | grep vsftpd | cut -c 1)" == "S" ] && /etc/init.d/vsftpd start
+
+}
+
+usb_umount(){
+
+if [ ! -z "$rpcd_usb" ]; then
+	usb_dev="$(uci -q get usbconf.@$rpcd_usb[0].device)"
+    if [ -z "$usb_dev" -a "$rpcd_usb" = "usb1" ]; then
+        rpcd_usb="ata2"
+        usb_dev="$(uci -q get usbconf.@$rpcd_usb[0].device)"
+    fi
+
+	usb_led="$(uci -q get usbconf.@$rpcd_usb[0].led)"
+
+	# Exit if invalid device
+	if [ -z "$usb_dev" ]; then
+		[ -f "/tmp/usb.lock" ] && rm /tmp/usb.lock
+		exit 1
+	fi
+
+	mounted_parts="$(mount | grep $usb_dev | awk '{print $1}' | cut -d '/' -f3 | uniq)"
+
+	config_parts="$(uci show usbconf | grep -w $rpcd_usb | grep -w ".device" | cut -d '.' -f1,2)"
+	for x in $mounted_parts; do
+		# Find config section
+		uci_section="$(uci show usbconf | grep $x | cut -d '.' -f1,2)"
+		usb_label="$(uci -q get $uci_section.label)"
+		[ -f "/mnt/$x" ] && umount "/usbconf/$usb_label" && umount "/mnt/$x"
+
+		# Force umount if necessary
+		[[ $(mount | grep -wo /mnt/$x) ]] && umount -l "/usbconf/$usb_label" && umount -l "/mnt/$x"
+
+		# Remove mount directory
+		[[ -d /mnt/$x ]] && rm "/usbconf/$usb_label" -r && rm "/mnt/$x" -r
+	done
+
+    [ "$rpcd_usb" = "ata2" ] && dev_fd="$(uci get usbconf.@ata2[0].device)"
+    [ ! -z "$dev_fd" ] && echo 1 > "/sys/block/$dev_fd/device/delete"
+	# Remove configuration sections
+	for x in $config_parts; do
+		uci delete $x
+	done
+	uci commit usbconf
+
+	# Disable led on umount
+	uci set $usb_led='none'
+	uci commit system
+
+	# rpcd led handling
+	sed -i '/$usb_led/d' /etc/leds
+	echo $usb_led='none' >> /etc/leds
+
+	[ -f "/tmp/detect_${rpcd_usb}" ] && rm "/tmp/detect_${rpcd_usb}"
+else
+	# Get currently mounted partitions
+	mounted_parts="$(uci show usbconf | grep -w '.device' | cut -d '=' -f2 | sed -e "s/^'//" -e "s/'$//" | grep [1-9])"
+
+	for x in $mounted_parts; do
+	  # Get partition name
+	  uci_section="$(uci show usbconf | grep $x | cut -d '.' -f1,2)"
+	  usb_label="$(uci -q get $uci_section.label)"
+
+	  part_name="$(mount | grep $x | awk '{print $1}' | cut -d '/' -f3 | uniq)"
+
+	  # Remove only partitions which doesn't exist
+	  if [[ ! $(ls /dev/ | grep -wo $x) ]]; then
+		[ -f "/mnt/$part_name" ] && umount "/usbconf/$usb_label" && umount "/mnt/$part_name"
+
+		# Force umount if necessary
+		[[ $(mount | grep -wo "/usbconf/$usb_label") ]] && umount -l "/usbconf/$usb_label" && umount -l "/mnt/$part_name"
+
+		# Remove mount directory
+		[[ -d /mnt/$part_name -a ! -z "$part_name" ]] && rm "/usbconf/$usb_label" -r && rm "/mnt/$part_name" -r
+
+		config_part="$(uci show usbconf | grep -w ${x} | cut -f1,2 -d "." | tail -1)"
+
+		# Turn off led
+		usb_led="$(uci get $config_part.led)"
+		uci set $usb_led='none'
+		uci commit system
+
+		# rpcd led handling
+		sed -i '/$usb_led/d' /etc/leds
+		echo $usb_led='none' >> /etc/leds
+
+		# Delete from config
+		uci delete $config_part
+		uci commit
+	  fi
+	done
+
+	loading_mark="$(ls /tmp/detect_usb[1-9])"
+	for z in $loading_mark; do
+		rm $z
+	done
+fi
+
+# Restart leds
+/etc/init.d/led restart > /dev/null
+
+if [ ! "$(mount | grep /mnt)" ]; then
+	[ "$(pgrep smb)" ] && /etc/init.d/samba stop
+	[ "$(pgrep vsftpd)" ] && /etc/init.d/vsftpd stop
+fi
+
+}
+
+case $1 in
+	mount)
+		[ ! -z "$2" ] && rpcd_usb="$2"
+		usb_mount
+	;;
+	umount)
+		[ ! -z "$2" ] && rpcd_usb="$2"
+		usb_umount
+	;;
+	*)
+		echo -n
+	;;
+esac
+
+# Remove lock file
+[ -f "/tmp/usb.lock" ] && rm /tmp/usb.lock

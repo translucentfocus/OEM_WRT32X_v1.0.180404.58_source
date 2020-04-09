@@ -1,0 +1,64 @@
+#!/bin/sh /etc/rc.common
+
+START=70
+USE_PROCD=1
+
+wan_iface="$(uci -q get network.wan.ifname)"
+wan_subnet="$(ip addr show $wan_iface | grep -w "inet" | awk '{print $2}' | cut -d '.' -f1,2,3)"
+lan_subnet="$(uci -q get network.lan.ipaddr | cut -d '.' -f1,2,3)"
+
+boot() {
+	ip_check(){
+		# Quit if there is no IP on wan
+		[ -z "$wan_subnet" ] && exit 1
+
+		# If subnets are the same, randomize IP on lan
+		if [[ $lan_subnet == $wan_subnet ]]; then
+			rn=$(awk 'function rn(n) { return int(rand()*n); } BEGIN {{ srand(); }{ printf("%d.%d", rn(254), rn    (254    ))}}')
+			uci set network.lan.ipaddr=10.$rn.1
+			uci commit network
+			uci del_list dhcp.@dnsmasq[0].address='/#/192.168.1.1'
+			uci add_list dhcp.@dnsmasq[0].address="/#/10.$rn.1"
+			uci commit dhcp
+		fi
+	}
+
+	eula_check() {
+		# Remove vlan_id related configuration, if any
+		$(sh /usr/libexec/rpcd/vlan call revert &> /dev/null)
+		testfile=/tmp/wanresult
+
+		# Make sure the interface is up
+		ifconfig $wan_iface up
+
+		# Check for DHCP
+		udhcpc -nRq -i $wan_iface > $testfile
+
+		if grep -q obtained $testfile; then
+			wan_subnet="$(cat /tmp/wanresult | grep "Lease of" | awk '{print $3}' | cut -d '.' -f1,2,3)"
+
+			# Run subnet check function
+			ip_check
+
+			if [ "$(uci -q get network.wan.proto)" != "dhcp" ]; then
+				uci set network.wan.proto=dhcp
+				uci commit network
+			fi
+
+			# Restart the network
+			/etc/init.d/network restart
+		fi
+	}
+
+	# Check for eula and run appropriate function
+	eula="$(uci -q get linksys.@firmware[0].eula_accepted)"
+	[ "$eula" -eq "0" ] && eula_check || ip_check
+
+	# Check if config is updated, restart network if needed
+	current_lan_ip="$(ip addr show br-lan | grep -w "inet" | awk '{print $2}' | cut -d '/' -f1)"
+	config_lan_ip="$(uci -q get network.lan.ipaddr)"
+
+	if [ "$current_lan_ip" != "$config_lan_ip" ]; then
+		/etc/init.d/network restart
+	fi
+}

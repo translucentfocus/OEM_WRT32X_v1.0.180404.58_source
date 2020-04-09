@@ -1,0 +1,82 @@
+#!/bin/sh
+
+case "$1" in
+	list)
+		echo '{"register": {"email":"str", "opt":"int"} }'
+	;;
+	call)
+		case "$2" in
+			register)
+				read input
+				# If the paramaters are provided, e.g called from the frontend
+				if [[ $(echo $input) != "{}" ]]; then
+					email_addr=$(echo "$input" | jsonfilter -e '@.email')
+					opt_in=$(echo "$input" | jsonfilter -e '@.opt')
+					serial_num=$(uci get linksys.@hardware[0].serial_number)
+					model_num=$(uci get linksys.@hardware[0].modelNumber)
+					hw_version=$(uci get linksys.@hardware[0].hw_revision)
+					fw_version=$(uci get linksys.@firmware[0].version)
+					mac_addr=$(uci get linksys.@hardware[0].hw_mac_addr)
+					reg_date=$(date +"%Y-%m-%dT%TZ")
+
+					# Create json file for sending
+					json_body() {
+						printf "{\"productRegistration\": {"
+						printf "\"serialNumber\":\"%s\"", $serial_num
+						printf "\"modelNumber\":\"%s\"", $model_num
+						printf "\"sku\":\"%s\"", $model_num
+						printf "\"emailAddress\":\"%s\"", $email_addr
+						printf "\"optIn\":\"%s\"", $opt_in
+						printf "\"registrationDate\":\"%s\"", $reg_date
+						printf "\"hardwareVersion\":\"%s\"", $hw_version
+						printf "\"firmwareVersion\":\"%s\"", $fw_version
+						printf "\"macAddress\":\"%s\"" $mac_addr
+						printf "} }"
+					}
+
+					json_body > /etc/productRegistration.json
+				else
+					# Else called from the cron, possible corner-cases
+					if [ -f "/etc/productRegistration.json" ]; then
+						sed -i '/email register/d' /etc/crontabs/root
+					fi
+				fi
+
+				# Check the network connection
+				nc -w 5 -z qa.linksyssmartwifi.com 80
+				if [ "$(echo $?)" == "0" ]; then
+					# Send json to the cloud
+					[ -f "/tmp/u_response" ] && rm /tmp/u_response
+					add_header="$(echo -n -e "\r\nAccept: application/json")"
+					uclient-fetch -O "/tmp/u_response" --post-data="$(cat /etc/productRegistration.json)" -H "Content-Type:application/json; charset=UTF-8$add_header" -H 'X-Cisco-HN-Client-Type-Id:8179210B-950D-439F-88C2-C6B7DE1F84EF' 'https://cloud1.linksyssmartwifi.com/product-service/rest/productRegistrations' &> /dev/null
+					if [ "$(echo $?)" == "0" ]; then
+						status="200"
+					else
+						status="400"
+					fi
+
+					# If successfull, delete any existing crons
+					if [ "$status" == "200" ]; then
+						sed -i '/email register/d' /etc/crontabs/root
+					else
+						# Delete existing cron and add a new one
+						sed -i '/email register/d' /etc/crontabs/root
+						echo "$(date "+%M %H") * * * ubus call email register" >> /etc/crontabs/root
+					fi
+				else
+					# Set cron at the current time
+					if [[ ! $(cat /etc/crontabs/root | grep -wo "email register") ]]; then
+						echo "$(date "+%M %H") * * * ubus call email register" >> /etc/crontabs/root
+						/etc/init.d/cron restart
+					fi
+				fi
+
+				# If something goes wrong, set status to 400
+				[[ -z $status ]] && status=400
+
+				printf '{"values":{"status":"%s"}}', $status
+
+			;;
+		esac
+	;;
+esac

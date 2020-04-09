@@ -1,0 +1,67 @@
+#!/bin/sh
+
+. /lib/config/uci.sh
+
+# KRouter items
+# TODO: find right dnsmasq server entry
+uci_set dhcp @dnsmasq[-1] dhcpscript "/usr/lib/krouter-scripts/dhcp-hook.sh"
+uci_commit
+/etc/init.d/dnsmasq reload
+
+logger -t krouter "Adding input iptables rules for DSCP tags"
+/usr/lib/krouter-scripts/firemark.sh
+
+a_bw=$(streamboost3 get "system.auto_bandwidth")
+if [ $? != 0 ] || [ $a_bw != 0 ]; then
+	streamboost3 set "system.auto_bandwidth=0"
+fi
+
+
+# Streamboost3 items
+kr=$(uci -q get krouter.krouter.enabled)
+sb3=$(streamboost3 get "system.enabled")
+if [ "$sb3" = "1" -o "$sb3" = "true" ]; then
+	sb3=1
+else
+	sb3=0
+fi
+
+# if sb3 and krouter settings differ, then we take krouter setting.
+if [ "$sb3" != "$kr" ]; then
+	if [ "$kr" = "0" ]; then
+		streamboost3 shutdown
+		streamboost3 disable
+	else
+		streamboost3 enable
+		streamboost3 boot
+	fi
+fi
+
+krup=$(uci -q get krouter.krouter.upload)
+sb3up=$(streamboost3 get bwestd.upload_limit)
+
+if [ $? != 0 ] || [ "$sb3up" != "$krup" ]; then
+	# Set upload bandwidth
+	parsed=${krup%bit}
+	logger -t krouter "setting sb3 bandwidth upload $parsed"
+	if [ "$parsed" -gt "0" ]; then
+		streamboost3 set "bwestd.upload_limit=$parsed"
+		if [ "$?" = "0" ]; then
+			uci -q set krouter.krouter.sb3_set_up=$krup
+		fi
+	fi
+fi
+
+krdwn=$(uci -q get krouter.krouter.download)
+sb3dwn=$(streamboost3 get bwestd.download_limit)
+if [ $? != 0 ] || [ "$sb3dwn" != "$krdwn" ]; then
+	# Set download bandwidth
+	parsed=${krdwn%bit}
+	logger -t krouter "setting sb3 bandwidth download $parsed"
+	if [ "$parsed" -gt "0" ]; then
+		streamboost3 set "bwestd.download_limit=$parsed"
+		if [ "$?" = "0" ]; then
+			uci -q set krouter.krouter.sb3_set_dwn=$krdwn
+		fi
+	fi
+fi

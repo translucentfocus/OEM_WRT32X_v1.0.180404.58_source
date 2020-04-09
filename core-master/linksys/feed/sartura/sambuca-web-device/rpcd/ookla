@@ -1,0 +1,36 @@
+#!/bin/sh
+
+case "$1" in
+	list)
+		echo '{ "generate":{} }'
+	;;
+	call)
+	case "$2" in
+		generate)
+		ookla_results="/tmp/ookla.txt"
+
+		# Run speedtest
+		(cd /usr/bin && ./ookla-nano --configurl=http://www.speedtest.net/api/embed/trial/config > $ookla_results)
+
+		# Assuming only 0 will be returned if everything's ok
+		if [ "$?" == "0" ]; then
+
+			# Check for "lastrun" variable
+			ookla_lastrun=$(fgrep lastrun /tmp/ookla.txt | cut -d ':' -f2)
+
+			if [ ! -z "$ookla_lastrun" ]; then
+				sed "s/$ookla_lastrun/ $(date +%s)/g" $ookla_results
+			else
+				echo "lastrun: $(date +%s)" >> $ookla_results
+			fi
+
+			printf "{ \"values\": {"
+			cat /tmp/ookla.txt | awk -F': ' '{gsub(/^[ ]+/, "", $2);print "\"" $1 "\":\"" $2 "\"," }'
+			printf " } }"
+		else
+			printf "{  \"values\": { \"error\": true }}"
+		fi
+		;;
+	esac
+	;;
+esac

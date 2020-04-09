@@ -1,0 +1,23 @@
+#!/bin/sh
+
+# Check linksys config for the firstboot
+firstboot=$(uci get linksys.@firmware[0].eula_accepted)
+
+if [ "$firstboot" != "1" -o -f "/etc/config/netshare" ]; then
+
+	# Create default usbconf confiiguration
+	if [[ ! -f /etc/config/usbconf ]]; then
+		touch /etc/config/usbconf
+		uci add usbconf global
+		uci set usbconf.@global[-1].state='disabled'
+		uci set usbconf.@global[-1].username='user'
+		uci set usbconf.@global[-1].password='password'
+		uci commit usbconf
+	fi
+
+	# Remove old configuration file
+	[[ -f /etc/config/netshare ]] && rm /etc/config/netshare
+	[[ -d /netshare ]] && rm -r /netshare
+fi
+
+exit 0

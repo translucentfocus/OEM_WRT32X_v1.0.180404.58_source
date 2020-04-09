@@ -1,0 +1,6 @@
+config krouter krouter
+	option enabled 1
+	option upload 1000000000bit
+	option download 1000000000bit
+	option sb3_set_up 0bit
+	option sb3_set_dwn 0bit

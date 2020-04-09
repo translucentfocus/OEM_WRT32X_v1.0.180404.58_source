@@ -1,0 +1,56 @@
+#!/bin/sh
+
+case "$1" in
+        list)
+                echo '{ "update":{}, "set": {} }'
+        ;;
+        call)
+                case "$2" in
+                        update)
+				# Set the timezone based on the browser preference
+				timezone=$(uci get sambuca.sambuca.timezone)
+
+				# Default to UTC if the browser is blocking the timezone pref
+				[[ -z $timezone ]] && timezone="UTC"
+
+				# Parse the reply
+				tz_value="$(echo $timezone | sed "s|/|-|" | awk '{print tolower($0)}')"
+				tz_code=$(jsonfilter -i /rom/www/langs/timezones-en.json -e "@[@.value='$tz_value'].code" | cut -d ',' -f1)
+
+				# Set default timezone
+				uci set system.@system[0].timezone=$tz_code
+				uci set system.@system[0].timezonestr=$tz_value
+				uci commit system
+
+				# Check for the network connection
+				$(nc -w 3 -z update1.linksys.com 443)
+				if [ "$?" == "0" ]; then
+					# Update the new timezone now
+					ntpd -q -p 0.openwrt.pool.ntp.org
+					/etc/init.d/system restart
+
+					status="true"
+
+					# Remove any existing cron rules from network fails
+					sed -i '/ntpd/d' /etc/crontabs/root
+				else
+					# Set cron to check time every half hour until connection is available
+					if [ -z "$(grep -w "ntpd update" /etc/crontabs/root)" ]; then
+						echo "*/1 * * * * ubus call ntpd update" >> /etc/crontabs/root
+						/etc/init.d/cron restart
+					fi
+
+					status="false"
+				fi
+
+                                printf '{ "values": { "success" : %s }}', $status
+			;;
+			set)
+				ntpd -q -p 0.openwrt.pool.ntp.org
+				/etc/init.d/system restart
+
+				printf '{ "values": { "success" : "ok" }}'
+			;;
+                esac
+        ;;
+esac

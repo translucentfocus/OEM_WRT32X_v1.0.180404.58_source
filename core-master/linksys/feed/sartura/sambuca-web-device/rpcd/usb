@@ -1,0 +1,234 @@
+#!/bin/sh
+
+case "$1" in
+        list)
+		echo '{ "memory": {}, "auth": {"action":"str", "values": {"username":"str", "password":"str"} }, "samba": {"action":"str"}, "ftp": {"action":"str"}, "mount": {"device":"str"}, "umount": {"device":"str"}, "info": {} }'
+        ;;
+        call)
+		case "$2" in
+			memory)
+				dev_list="usb1 usb2"
+
+				printf "{ \"values\": {"
+				for y in $dev_list; do
+					[ -f "/tmp/detect_${y}" ] && dev_loading="1" || dev_loading="0"
+					dev_name=$y
+					part_list="$(uci show usbconf | grep -w ${dev_name}-[1-9] | grep -w device | cut -d '.' -f1,2)"
+                    # check ata2 port on usb1
+                    [ "$dev_name" = "usb1" ] && [ -z "$part_list" ] && part_list="$(uci show usbconf | grep -w ata2-[1-9] | grep -w device | cut -d '.' -f1,2)"
+					printf "\"$dev_name\" : {"
+					printf "\"loading\": \"%s\"," "$dev_loading"
+					printf "\"data\": ["
+					for x in $part_list; do
+						label="$(uci get $x.label)"
+						x_valid="$(uci get $x.valid)"
+						x="$(uci get $x.device)"
+
+						if [ "$x_valid" == "1" ]; then
+							# Get memory values
+							part_used=$(df -k /dev/${x} | awk '{print $3}' | tail -1)
+							part_avail=$(df -k /dev/${x} | awk '{print $4}' | tail -1)
+
+							printf "{ \"name\":\"%s\", \"label\":\"%s\", \"used\":\"%s\", \"available\":\"%s\", \"valid\":\"%s\" }", "$x" "$label" "$part_used" "$part_avail" "$x_valid"
+						else
+							printf "{ \"name\":\"%s\", \"label\":\"%s\", \"valid\": \"%s\" }", "$x" "$label" "$x_valid"
+						fi
+					done
+					printf "]},"
+				done
+				printf "} }"
+			;;
+
+			auth)
+			read input
+			action=$(echo "$input" | jsonfilter -e '@.action')
+			username=$(echo "$input" | jsonfilter -qe '@.values.username')
+			password=$(echo "$input" | jsonfilter -qe '@.values.password')
+			  case "$action" in
+				start)
+					# If there were no parameters receved, check the usbconf config
+					[[ -z $username ]] && username=$(uci get usbconf.@global[0].username)
+					[[ -z $password ]] && password=$(uci get usbconf.@global[0].password)
+
+					# Exit if the username is empty, otherwise this will brick the webUI
+					if [ -z $username ] || [ -z $password ]; then
+						exit 1
+					fi
+
+					# If start is called for a second time, delete the previous user credentials
+					auth_state=$(uci get usbconf.@global[0].state)
+					if [ "$auth_state" == "enabled" ]; then
+						user_old=$(uci get usbconf.@global[0].username)
+						smbpasswd -x $user_old
+						sed -i "/$user_old/d" /etc/passwd
+					fi
+
+					# Create usbconf config
+					[[ ! -f /etc/config/usbconf ]] && touch /etc/config/usbconf && uci add usbconf global
+					uci set usbconf.@global[-1].username="$username"
+					uci set usbconf.@global[-1].password="$password"
+					uci set usbconf.@global[-1].state="enabled"
+					# Pipe output to /dev/null, otherwise it messes with json return parameter
+					uci commit usbconf &> /dev/null
+
+					# Create new user account
+					[[ ! $(cat /etc/passwd | grep $username ) ]] && \
+					$(echo "$username:x:1000:1000:root:/usbconf:/bin/false" >> /etc/passwd)
+					$(echo -e "$password\n$password\n" | passwd $username)
+
+					# Setup configuration for the user
+					echo -ne "$password\n$password\n" | smbpasswd -a -s $username
+					sed -i "s/guest account = root/guest account = nobody/g" /etc/samba/smb.conf.template
+					sed -i "s/invalid users = nobody/invalid users = root/g" /etc/samba/smb.conf.template
+					sed -i "s/null passwords = yes/null passwords = no/g" /etc/samba/smb.conf.template
+					sed -i "s/guest ok = yes/guest ok = no/g" /etc/samba/smb.conf.template
+					uci set samba.@sambashare[0].guest_ok='no'
+					uci set samba.@sambashare[0].users=$username
+					uci commit samba
+
+					# Set FTP credentials
+					sed -i "s/anonymous_enable=YES/anonymous_enable=NO/g" /etc/vsftpd.conf
+					sed -i "s/local_enable=NO/local_enable=YES/g" /etc/vsftpd.conf
+					[[ -d /home/ftp ]] && rm -r /home/ftp
+
+					# Restart services
+					[[ $(pgrep smb | head -1) ]] && /etc/init.d/samba restart
+					[[ $(pgrep vsftpd | head -1) ]] && /etc/init.d/vsftpd restart
+
+					status="enabled"
+					printf '{ "values": { "status" : "%s" }}', $status
+				;;
+				stop)
+					# Restore default samba configuration (guest mode)
+					sed -i "s/guest account = nobody/guest account = root/g" /etc/samba/smb.conf.template
+					sed -i "s/invalid users = root/invalid users = nobody/g" /etc/samba/smb.conf.template
+					sed -i "s/null passwords = no/null passwords = yes/g" /etc/samba/smb.conf.template
+					sed -i "s/guest ok = no/guest ok = yes/g" /etc/samba/smb.conf.template
+					sed -i "/restrict anonymous = 2/d" /etc/samba/smb.conf.template
+					uci set samba.@sambashare[0].guest_ok='yes'
+					uci set samba.@sambashare[0].users='root'
+					uci commit samba
+
+					# Restore FTP configuration
+					sed -i "s/anonymous_enable=NO/anonymous_enable=YES/g" /etc/vsftpd.conf
+					sed -i "s/local_enable=YES/local_enable=NO/g" /etc/vsftpd.conf
+					mkdir -p /home
+					ln -s /usbconf /home/ftp
+
+					# Remove user
+					username=$(uci get usbconf.@global[0].username)
+					smbpasswd -x $username
+					sed -i "/$username/d" /etc/passwd
+
+					# Restart services
+					[[ $(pgrep smb | head -1) ]] && /etc/init.d/samba restart
+					[[ $(pgrep vsftpd | head -1) ]] && /etc/init.d/vsftpd restart
+
+					# Set state to disabled
+					uci set usbconf.@global[-1].state="disabled"
+					uci commit usbconf
+
+					status="disabled"
+					printf '{ "values": { "status" : "%s" }}', $status
+				;;
+				esac
+			;;
+
+			samba)
+			read input
+			action=$(echo "$input" | jsonfilter -e '@.action')
+			  case "$action" in
+				start)
+					/etc/init.d/samba enable
+					/etc/init.d/samba start
+					status="enabled"
+					printf '{ "values": {"status":"%s"}}', $status
+				;;
+				stop)
+					/etc/init.d/samba disable
+					/etc/init.d/samba stop
+					status="disabled"
+					printf '{ "values": {"status":"%s"}}', $status
+				;;
+				esac
+			;;
+			ftp)
+			read input
+			action=$(echo "$input" | jsonfilter -e '@.action')
+			check=$(echo "$input" | jsonfilter -qe '@.check')
+			port=$(echo "$input" | jsonfilter -qe '@.port')
+			[[ $(echo "$input" | jsonfilter -t '@.check') ]] && action="check"
+			[[ $(echo "$input" | jsonfilter -t '@.port') ]] && action="port"
+			  case "$action" in
+				start)
+					/etc/init.d/vsftpd enable
+					/etc/init.d/vsftpd start
+					status="enabled"
+					printf '{"values": {"status":"%s"}}', $status
+				;;
+				stop)
+					/etc/init.d/vsftpd disable
+					/etc/init.d/vsftpd stop
+					status="disabled"
+					printf '{"values": {"status":"%s"}}', $status
+				;;
+				check)
+					used_ports="$(netstat -tulpn | sed -n '1,2!p' | awk '{print $4}' | grep -o '[^:]*$' | awk '!a[$0]++')"
+					for x in $used_ports; do
+						if [[ $check == $x ]]; then
+							used=1
+							printf '{"values": {"used":"1"}}'
+						fi
+					done
+					[[ -z $used ]] && printf '{"values": {"used":"0"}}'
+				;;
+				port)
+					# If the port entry is empty, use default port
+					[[ -z $port ]] && port="21"
+
+					[[ $(pgrep vsftpd) ]] && /etc/init.d/vsftpd stop
+
+					# Clean any existing port values
+					$(sed -i "/listen_port=/d" /etc/vsftpd.conf)
+					$(echo "listen_port=$port" >> /etc/vsftpd.conf)
+
+					# Restart service (if enabled)
+					[[ $(ls /etc/rc.d/S50vsftpd) ]] && /etc/init.d/vsftpd restart
+
+					printf '{"values": {"port":"%s"}}', $port
+				;;
+				esac
+			;;
+			mount)
+				read input
+				device=$(echo "$input" | jsonfilter -e '@.device')
+
+				[ ! -f "/tmp/detect_${device}" ] && touch /tmp/detect_${device}
+				/sbin/usb-detect mount $device &> /dev/null
+				[ -f "/tmp/detect_${device}" ] && rm /tmp/detect_${device}
+				printf '{"values": {"device":"%s"}}', $device
+			;;
+			umount)
+				read input
+				device=$(echo "$input" | jsonfilter -e '@.device')
+
+				/sbin/usb-detect umount $device &> /dev/null
+				printf '{"values": {"device":"%s"}}', $device
+			;;
+			info)
+				enabled=$(uci get usbconf.@global[0].state)
+				username=$(uci get usbconf.@global[0].username)
+				password=$(uci get usbconf.@global[0].password)
+
+				# Services
+				[[ $(pgrep smb | head -1) ]] && samba_state="enabled" || samba_state="disabled"
+				[[ $(pgrep vsftpd | head -1) ]] && ftp_state="enabled" || ftp_state="disabled"
+				ftp_port=$(cat /etc/vsftpd.conf | grep -w listen_port | cut -d '=' -f2)
+				[[ -z $ftp_port ]] && ftp_port="21"
+
+				printf '{"values": {"auth":{"enabled":"%s", "username":"%s", "password":"%s"}, "samba":{"state":"%s"}, "ftp":{"state":"%s", "port":"%s"} } }', \
+				$enabled $username $password $samba_state $ftp_state $ftp_port
+			;;
+		esac
+	;;
+esac

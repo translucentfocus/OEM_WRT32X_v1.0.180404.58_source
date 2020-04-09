@@ -1,0 +1,37 @@
+#!/bin/sh
+
+case "$1" in
+	list)
+		echo '{ "get": {} }'
+	;;
+	call)
+		 case "$2" in
+			get)
+				printf "{ \"values\": {"
+				sh /etc/conndev
+				while read NEIGHLIST
+				do
+					hostname="$(echo "$NEIGHLIST" | awk '{print $1}' | sed 's/_|_/ /g')"
+                                        printf "\"%s\" : " "$hostname"
+
+                                        mac="$(echo "$NEIGHLIST" | awk '{print $3}')"
+                                        printf "{ \"mac\" : \"%s\"", "$mac"
+
+                                        ipaddr="$(echo "$NEIGHLIST" | awk '{print $2}')"
+                                        printf "\"ip\":\"%s\"", "$ipaddr"
+
+                                        network="$(echo "$NEIGHLIST" | awk '{print $4}')"
+                                        printf "\"network\":\"%s\"", "$network"
+
+                                        priority="$(ubus call krouter get_macprio '{"macaddr":"'$mac'"}' | jsonfilter -e '@.values.prio')"
+					printf "\"priority\": \"%s\"", "$priority"
+
+					killer="$(ubus call krouter is_krouter_endpoint '{"macaddr":"'$mac'"}' | jsonfilter -e '@.values.present')"
+                                        printf "\"killer\": %s } ", "$killer"
+
+				done < /tmp/neighlist
+				printf "} }"
+			;;
+		esac
+	;;
+esac

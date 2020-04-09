@@ -1,0 +1,32 @@
+#!/bin/sh
+
+dev_type=$(echo $DEVPATH | sed 's/.*\(ata2\).*/\1/')
+if [[ "$dev_type" = "ata2" ]]; then
+case $ACTION in
+    add)
+# Depending on the type of storage and filesystem, detecting can take a while.
+# Use killtime to set time limit for this, after drive will be shown as invalid.
+        killtime=10
+        while [[ $killtime -gt 0 ]]; do
+            if [[ -z $esata_dev ]]; then
+# USB1 is used when eSATA plug in
+                usb_port="1"
+                [ ! -z "$usb_port" -a ! -f "/tmp/detect_usb${usb_port}" ] && touch /tmp/detect_usb${usb_port}
+                esata_dev=$(ls /sys$DEVPATH/block/)
+                sleep 1
+                killtime=$((killtime-1))
+            else
+                break
+            fi
+        done
+        if [[ $killtime -gt 0 ]]; then
+            /sbin/usb-detect mount
+            exit 0
+        fi
+    ;;
+    remove)
+        /sbin/usb-detect umount
+    ;;
+esac
+fi
+

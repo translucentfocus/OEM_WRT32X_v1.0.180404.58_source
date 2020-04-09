@@ -1,0 +1,80 @@
+#!/bin/sh
+
+remove_vlan_iface() {
+	# Check for existing vlan configs on the interface
+	if [ "$(echo $wan_interface | grep ".")" ]; then
+		[ "$(ip link show $wan_interface | grep "@$(echo $wan_interface | cut -d '.' -f1)")" ] && $(ip link delete $wan_interface &> /dev/null)
+		wan_interface="$(echo $wan_interface | cut -d '.' -f1)"
+	fi
+}
+
+case "$1" in
+	list)
+		echo '{ "set": {"username":"str", "password":"str", "vlan":"str"}, "get": {}, "revert": {} }'
+	;;
+	call)
+		case "$2" in
+		set)
+			# Get the credentials and (optionally) vlan_id
+			pppoe_username="$(uci -q get network.wan.username)"
+			pppoe_password="$(uci -q get network.wan.password)"
+			pppoe_vlan="$(uci -q get network.wan.vlanId)"
+			wan_interface="$(uci -q get network.wan.ifname)"
+
+			#remove_vlan_iface
+			wan_interface="$(echo $wan_interface | cut -d '.' -f1)"
+
+			if [ ! -z "$pppoe_vlan" ]; then
+				# Set VLAN and ports
+				$(uci set network.wan.ifname=$wan_interface.$pppoe_vlan)
+				$(uci set network.wan6.ifname=$wan_interface.$pppoe_vlan)
+				$(uci set network.@switch_vlan[1].vid=$pppoe_vlan)
+				$(uci set network.@switch_vlan[1].ports='4t 5t')
+			else
+				wan_interface="$(uci -q get network.wan.ifname | cut -d '.' -f1)"
+				$(uci set network.wan.ifname=$wan_interface)
+				$(uci set network.wan6.ifname=$wan_interface)
+				$(uci set network.@switch_vlan[1].ports='4 5')
+			fi
+
+			$(uci commit network)
+			$(ifdown wan)
+			$(ifup wan)
+
+			status="ok"
+			printf '{"values": {"status": "%s"} }', $status
+		;;
+		get)
+			pppoe_username="$(uci -q get network.wan.username)"
+			pppoe_password="$(uci -q get network.wan.password)"
+			pppoe_vlan="$(uci -q get network.@switch_vlan[1].vid)"
+			[ -z "$pppoe_username" ] && pppoe_username="-1"
+			[ -z "$pppoe_password" ] && pppoe_password="-1"
+			[ -z "$pppoe_vlan" ] && pppoe_vlan="-1"
+
+			printf '{"values": {"user": "%s", "pass": "%s", "vlan": "%s"} }', $pppoe_username $pppoe_password $pppoe_vlan
+		;;
+		revert)
+			# Revert the VLAN changes
+			wan_interface="$(uci -q get network.wan.ifname)"
+
+			#remove_vlan_iface
+			wan_interface="$(echo $wan_interface | cut -d '.' -f1)"
+
+			$(uci set network.wan.ifname=$wan_interface)
+
+			wan6_iface="$(uci -q get network.wan6.ifname)" && $(uci set network.wan6.ifname=$(echo $wan6_iface | cut -d '.' -f1))
+			[ "$(uci -q get network.@switch_vlan[1].vid)" ] && $(uci delete network.@switch_vlan[1].vid)
+			[ "$(uci -q get network.wan.vlanId)" ] && $(uci delete network.wan.vlanId)
+			$(uci set network.wan6.proto=dhcpv6)
+			$(uci set network.@switch_vlan[1].ports='4 5')
+			$(uci commit network)
+			$(ifdown wan)
+			$(ifup wan)
+
+			status="ok"
+			printf '{"values": {"status": "%s"} }', $status
+		;;
+	esac
+	;;
+esac

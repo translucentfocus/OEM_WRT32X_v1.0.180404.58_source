@@ -1,0 +1,85 @@
+#!/bin/sh
+
+case "$1" in
+	list)
+		echo '{ "list": {"device":"str"}, "get": {"device":"str"} }'
+	;;
+	call)
+		 case "$2" in
+			list)
+			read input
+			region=$(strings /dev/mtd3|sed -ne 's/^cert_region=//p')
+			device=$(echo "$input" | jsonfilter -e '@.device')
+			case "$region" in
+				US)
+					LIST_2G="1 2 3 4 5 6 7 8 9 10 11"
+					LIST_5G="36 40 44 48 52 56 60 64 100 104 108 112 116 120 124 128 132 136 140 144 149 153 157 161 165"
+				;;
+
+				CA)
+					LIST_2G="1 2 3 4 5 6 7 8 9 10 11"
+					LIST_5G="36 40 44 48 52 56 60 64 100 104 108 112 116 132 136 140 149 153 157 161 165"
+				;;
+
+				EU)
+					LIST_2G="1 2 3 4 5 6 7 8 9 10 11 12 13"
+					LIST_5G="36 40 44 48 52 56 60 64 100 104 108 112 116 120 124 128 132 136 140"
+				;;
+
+				AH)
+					LIST_2G="1 2 3 4 5 6 7 8 9 10 11 12 13"
+					LIST_5G="36 40 44 48 52 56 60 64 149 153 157 161 165"
+				;;
+
+				AU)
+					LIST_2G="1 2 3 4 5 6 7 8 9 10 11 12 13"
+					LIST_5G="36 40 44 48 52 56 60 64 100 104 108 112 116 132 136 140 149 153 157 161 165"
+				;;
+				CN)
+					LIST_2G="1 2 3 4 5 6 7 8 9 10 11 12 13"
+					LIST_5G="36 40 44 48 52 56 60 64 149 153 157 161 165"
+				;;
+				HK)
+					LIST_2G="1 2 3 4 5 6 7 8 9 10 11"
+					LIST_5G="36 40 44 48 100 104 108 112 116 120 124 128 132 136 140 144 149 153 157 161 165"
+				;;
+				*)
+					# If unsupported region, use 2.4 and 5 GHz values which are world-wide supported
+					LIST_2G="1 2 3 4 5 6 7 8 9 10 11 12 13"
+					LIST_5G="36 40 44 48"
+				;;
+			esac
+
+			if [[ $device == "wdev0" ]]; then
+				printf "{\"values\": ["
+				for x in $LIST_2G; do
+					y=$(cat /etc/channels/2Glist | grep -w $x | cut -d '=' -f2)
+					printf "{"
+					printf \"channel\":\"%s\", $x
+					printf \"mhz\":\"%s\", $y
+				printf "},"
+				done
+				printf "]}"
+			elif [[ $device == "wdev1" ]]; then
+				printf "{\"values\": ["
+				for x in $LIST_5G; do
+					y=$(cat /etc/channels/5Glist | grep -w $x | cut -d '=' -f2)
+					printf "{"
+					printf \"channel\":\"%s\", $x
+					printf \"mhz\":\"%s\", $y
+				printf "},"
+				done
+				printf "]}"
+			else
+				printf '{"values":"invalid"}'
+			fi
+			;;
+			get)
+				read input
+				device=$(echo "$input" | jsonfilter -e '@.device')
+				curr_channel=$(iwlist $device channel | grep "Current Channel" | cut -d ':' -f2)
+				printf '{"values": {"channel":"%s"}}', $curr_channel
+			;;
+		esac
+	;;
+esac

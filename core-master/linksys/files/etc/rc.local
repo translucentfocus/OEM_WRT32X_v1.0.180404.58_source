@@ -1,0 +1,6 @@
+# upgrade u-boot from 2.0.6 to 2.0.9 if needed
+current_version=$(uci get linksys.@hardware[0].sw_version)
+
+if [[ "$current_version" == "v2.0.6" ]]; then
+	mtd write /uboot209.bin u-boot
+fi

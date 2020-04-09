@@ -1,0 +1,85 @@
+#!/bin/sh
+
+case "$1" in
+	list)
+		echo '{ "generate":{}, "hint":{}, "lang":{}, "firstboot":{}, "id":{}, "setlang":{"value":"str"} }'
+	;;
+	call)
+		case "$2" in
+			generate)
+				counter=0
+				FILE=/etc/wordlist.txt
+
+				#get the total line number from password file, remove last chars from file
+				NUMOFLINES=$(wc -l < "$FILE")
+				let NUMOFLINES=$NUMOFLINES-2
+
+				while [ $counter -lt 4 ]; do
+                                        #randomize the line
+                                        RANDOM=$(cat /dev/urandom | tr -cd '0-9' | head -c 5 | sed -e 's/^[0]*//') 2>/dev/null
+					if [ "$RANDOM" = "" ]; then RANDOM=0; fi
+					RND=$(( ($RANDOM % $NUMOFLINES) + 2 ))
+					# get the line and words count mind the last comma
+					LINE=$(sed -n ${RND}p < $FILE)
+					WCOUNT=$(echo "$LINE" | awk -F',' '{gsub(/,$/,""); print NF}')
+					# radnomize the word
+					RANDOM=$(cat /dev/urandom | tr -cd '0-4' | head -c 5 | sed -e 's/^[0]*//') 2>/dev/null
+					if [ "$RANDOM" = "" ]; then RANDOM=0; fi
+					RND=$(( ($RANDOM % $WCOUNT ) + 1 ))
+					# get the random word from a line, remove '"'
+					WORD=$(echo "$LINE" | awk -v word=$RND -F',' '{gsub("\"",""); print $word}')
+
+					# create pass, mind the '-', dont append after last word
+					if [ $counter -lt 3 ]; then
+						PASS=$PASS$WORD"-"
+					else
+						PASS=$PASS$WORD
+					fi
+
+					let counter=$counter+1
+				done
+
+				printf '{ "values": {"password":"%s"}}' $PASS
+			;;
+			hint)
+				HINT=$(uci get sambuca.@system[0].hint)
+				# blank spaces are ...special cases
+				printf '{ "values": { "hint" : "'
+				for WORD in $HINT; do
+					printf "%s " $WORD
+				done
+				printf '"}}' $HINT
+			;;
+			lang)
+				LANG=$(uci -q get sambuca.@system[0].lang)
+				printf '{ "values": { "lang" : "'
+				for WORD in $LANG; do
+					printf "%s " $WORD
+				done
+				printf '"}}' $LANG
+			;;
+			firstboot)
+				FIRSTBOOT=$(uci get sambuca.@system[0].first_boot)
+				printf '{ "values": {"firstboot": %s}}' $FIRSTBOOT
+			;;
+			id)
+                                WAN_ID="$(cat /sys/class/net/eth0/address | awk '{print toupper($0)}')"
+
+                                eula=$(uci get linksys.@firmware[0].eula_accepted)
+                                WIZARD_RESTART='0'
+                                [ "$eula" != '1' ] && WIZARD_RESTART='1'
+
+                                printf '{ "values": { "id" : "%s", "wizard_restart" : "%s" } }' $WAN_ID $WIZARD_RESTART
+			;;
+			setlang)
+				read input
+				detect_lang="$(echo "$input" | jsonfilter -e '@.value')"
+				[ -z "$detect_lang" ] && lang='US'
+				uci set sambuca.sambuca.lang=$detect_lang
+				uci commit sambuca
+
+				printf '{ "values": { "lang" : "%s" } }' $detect_lang
+			;;
+		esac
+	;;
+esac

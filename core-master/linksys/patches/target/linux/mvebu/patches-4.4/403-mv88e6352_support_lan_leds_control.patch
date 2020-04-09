@@ -1,0 +1,95 @@
+Index: linux-4.4.14/drivers/net/dsa/mv88e6352.c
+===================================================================
+--- linux-4.4.14.orig/drivers/net/dsa/mv88e6352.c	2016-06-25 00:18:38.000000000 +0700
++++ linux-4.4.14/drivers/net/dsa/mv88e6352.c	2017-07-21 13:47:17.730210802 +0700
+@@ -20,8 +20,19 @@
+ #include <linux/platform_device.h>
+ #include <linux/phy.h>
+ #include <net/dsa.h>
++#include <linux/device.h>
++#include <asm/uaccess.h>
+ #include "mv88e6xxx.h"
+ 
++
++#define PORT_LED_CONTROL 0x16
++#define PORT_LED_ON 0x8033
++#define PORT_LED_OFF 0x80ee
++#define LED_OFF 0
++#define LED_ON 1
++#define LED_UNKNOWN 2
++#define BUFF_MAX_SIZE 4
++
+ static const struct mv88e6xxx_switch_id mv88e6352_table[] = {
+ 	{ PORT_SWITCH_ID_6172, "Marvell 88E6172" },
+ 	{ PORT_SWITCH_ID_6176, "Marvell 88E6176" },
+@@ -36,8 +47,61 @@
+ 	{ PORT_SWITCH_ID_6352_A1, "Marvell 88E6352 (A1)" },
+ };
+ 
++char sys_buff[BUFF_MAX_SIZE];
++struct dsa_switch *g_ds;
++
++static ssize_t led_show(struct device *dev,
++		struct device_attribute *attr, char *buf)
++{
++	return snprintf(buf, BUFF_MAX_SIZE, "%s\n", sys_buff);
++}
++
++static ssize_t led_write(struct device *dev,
++		struct device_attribute *attr, const char *buf, size_t n)
++{
++	int i, status;
++
++	struct dsa_switch *ds = g_ds;
++
++	if (!ds) {
++		return 0;
++	}
++
++	status = LED_UNKNOWN;
++	if (!strncmp(buf, "off", 3)) {
++		status = LED_OFF;
++	} else if (!strncmp(buf, "on", 2)) {
++		status = LED_ON;
++	}
++
++	if (status != LED_UNKNOWN) {
++		for (i = 0; i <= 3; i++) {
++			switch(status) {
++				case LED_OFF:
++					REG_WRITE(REG_PORT(i), PORT_LED_CONTROL, PORT_LED_OFF);
++					break;
++				case LED_ON:
++					REG_WRITE(REG_PORT(i), PORT_LED_CONTROL, PORT_LED_ON);
++					break;
++				default:
++					break;
++			}
++		}
++		strncpy(sys_buff, buf, n);
++	}
++
++	return n;
++}
++
++static DEVICE_ATTR(lan_leds, 0644, led_show, led_write);
++
+ static char *mv88e6352_probe(struct device *host_dev, int sw_addr)
+ {
++	int ret;
++	ret = device_create_file(host_dev, &dev_attr_lan_leds);
++	if (ret)
++		device_remove_file(host_dev, &dev_attr_lan_leds);
++
+ 	return mv88e6xxx_lookup_name(host_dev, sw_addr, mv88e6352_table,
+ 				     ARRAY_SIZE(mv88e6352_table));
+ }
+@@ -80,6 +144,8 @@
+ 	struct mv88e6xxx_priv_state *ps = ds_to_priv(ds);
+ 	int ret;
+ 
++	g_ds = ds;
++
+ 	ret = mv88e6xxx_setup_common(ds);
+ 	if (ret < 0)
+ 		return ret;

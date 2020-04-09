@@ -1,0 +1,17 @@
+#!/bin/sh
+
+# Create default dhcp configuration
+if [[ -f /etc/config/dhcp ]]; then
+	uci set dhcp.@dnsmasq[0].local='/local/'
+	uci set dhcp.@dnsmasq[0].domain='local'
+	uci set dhcp.@dnsmasq[0].strictorder='1'
+	uci commit dhcp
+fi
+
+# If "myrouter.local" entry doesn't exist, add it after localhost
+if [[ -z "$(grep -wo 'myrouter' /etc/hosts)" ]]; then
+	lan_ip=$(uci get network.lan.ipaddr)
+	sed -i "/127.0.0.1/a $lan_ip myrouter" /etc/hosts
+fi
+
+exit 0

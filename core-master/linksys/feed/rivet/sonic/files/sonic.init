@@ -1,0 +1,92 @@
+#!/bin/sh
+
+#
+# Required config
+#
+SERVICE="sonic"
+
+. ${STREAMBOOST_CFGDIR:=/etc/streamboost3}/rc.streamboost3
+
+START=31
+STOP=69
+
+#
+# Environment config
+#
+
+# Available system engines. Should be defined the sys.conf file for StreamBoost
+# otherwise we assume ALL engines are available
+SB_OFFLOAD_ENGINES=${SB_OFFLOAD_ENGINES:="ALL"}
+SB_ENGINE_DIR="${STREAMBOOST_CFGDIR}/engines"
+
+#
+# Command line parameters
+#
+OPTIONS_RUN="--daemon \
+-e ${SB_OFFLOAD_ENGINES} \
+-p ${PIDFILE} \
+-n ${SERVICE} \
+"
+
+# NOTE: since offloading is not critical then we don't return an error on the
+# case of booting/starting Sonic. This prevents the FSM in the main streamboost3
+# script from stopping all services that are not dependent on Sonic.
+
+# Send the nxcli command to start offloading
+start_offload() {
+	echo -n "${SERVICE} starting offloading..."
+	result=$(nxcli -q OFFLOAD -p "${SB_OFFLOAD_ENGINES}:START" -t "${SERVICE}" >/dev/null 2>&1)
+	if [ ! $? -eq 0 ]; then
+		echo "[ FAIL ]"
+		sb_logger "Failed to start offloading: ${result}"
+		return 1
+	fi
+	echo "[ OK ]"
+	return 0
+}
+
+# Send the nxcli command to stop offloading
+stop_offload() {
+	echo -n "${SERVICE} stopping offloading..."
+	result=$(nxcli -q OFFLOAD -p "${SB_OFFLOAD_ENGINES}:STOP" -t "${SERVICE}" >/dev/null 2>&1)
+	if [ ! $? -eq 0 ]; then
+		echo "[ FAIL ]"
+		sb_logger "Failed to stop offloading: ${result}"
+		return 1
+	fi
+	echo "[ OK ]"
+	return 0
+
+}
+
+# Attempt to disable the netlink interface after stopping the daemon
+stop() {
+	default_stop "$@"
+	retval=$?
+	if [ ! $retval -eq 0 ]; then
+		return $retval
+	fi
+
+	for engine in "${SB_ENGINE_DIR}"/*; do
+		source ${engine}
+		echo "${SERVICE}: stopping engine ${ENGINE_NAME}"
+		engine_stop
+	done
+
+	return 0
+}
+
+# Attempt to enable the netlink interface before starting the daemon
+start() {
+	for engine in "${SB_ENGINE_DIR}"/*; do
+		source ${engine}
+		echo "${SERVICE}: loading engine ${ENGINE_NAME}"
+		engine_init
+	done
+	default_start "$@"
+}
+
+#
+# MAIN
+#
+action "$@"

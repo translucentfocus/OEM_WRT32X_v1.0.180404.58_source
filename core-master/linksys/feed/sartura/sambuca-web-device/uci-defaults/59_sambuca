@@ -1,0 +1,25 @@
+#!/bin/sh
+
+# Create DEFAULT sambuca config
+if [[ ! -f /etc/config/sambuca ]]; then
+	touch /etc/config/sambuca
+	uci set sambuca.sambuca='system'
+	uci set sambuca.sambuca.first_boot='1'
+	uci set sambuca.sambuca.update='nightly'
+	uci set sambuca.sambuca.eula='0'
+fi
+
+# Add additional options which might be missing
+uci -q get sambuca.sambuca.led
+[ "$?" != "0" ] && uci set sambuca.sambuca.led='1'
+
+uci -q get sambuca.sambuca.wizupgrade
+[ "$?" != "0" ] && uci set sambuca.sambuca.wizupgrade='1'
+
+# Set default value for WAN LED
+uci -q get sambuca.sambuca.wan
+[ "$?" != "0" ] && uci set sambuca.sambuca.wan='0'
+
+uci commit sambuca
+
+exit 0

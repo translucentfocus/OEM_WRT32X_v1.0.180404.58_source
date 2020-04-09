@@ -1,0 +1,4 @@
+config MARVELL_HOSTAPD_SOURCES
+        bool "Compile hostapd from source"
+        depends on PACKAGE_hostapd-common
+        default n

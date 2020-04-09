@@ -1,0 +1,78 @@
+#!/bin/sh
+
+case "$1" in
+	list)
+		echo '{ "update": {}, "sysupgrade": {} }'
+	;;
+	call)
+		case "$2" in
+			update)
+			  check_update=$(uci -q get sambuca.sambuca.update)
+			  [ -z "$check_update" ] && check_update="nightly"
+			  if [ "$check_update" == "nightly" ]; then
+
+				# Check the internet connection
+				netcon=$(sh /usr/libexec/rpcd/connection call status | jsonfilter -e '@.values.state')
+				if [ "$netcon" == "Connected" ]; then
+
+					# If server response was not empty, get image url
+					if [ -f "/etc/fwupdate" ]; then
+						get_url="$(jsonfilter -i /etc/fwupdate -qe '@.download_url')"
+						get_md5="$(jsonfilter -i /etc/fwupdate -qe '@.md5sum')"
+
+						# If empty, mark as error
+						if [ -z "$get_url" ]; then
+							echo "error" > /tmp/imagestatus
+							logger -t "${0##*/}" "[ wizard ]: invalid firmware URL"
+						else
+							image_name="$(echo ${get_url} | grep -o '[^/]*$')"
+						fi
+
+						# If update gets called twice for any reason, check for the existing image and remove it to avoid uclient-fetch fail
+						[ -f "/tmp/$image_name" ] && rm /tmp/$image_name
+						uclient-fetch "$get_url" -P /tmp/ &> /dev/null
+
+						if [ -f "/tmp/$image_name" ]; then
+							echo "success" > /tmp/imagestatus
+							printf '{"values": {"status":"success"}}'
+						else
+							echo "error" > /tmp/imagestatus
+							logger -t "${0##*/}" "[ wizard ]: error downloading the image"
+							kill $(pgrep uclient-fetch) &> /dev/null
+							printf '{"values": {"status":"failed"}}'
+						fi
+					else
+						if [ ! -f "/tmp/fw_update_failed" ]; then
+							# Update fail, call 'check' again
+							logger -t "${0##*/}" "[ wizard ]: error with server response, retrying.."
+							sh /usr/libexec/rpcd/fwupdate call check > /dev/null 2>&1
+							touch /tmp/fw_update_failed
+						else
+							printf '{"values": {"status":"failed"}}'
+						fi
+					fi
+				else
+					logger -t "${0##*/}" "[ wizard ]: no internet connection"
+					printf '{"values": {"status":"noconn"}}'
+				fi
+			  else
+					logger -t "${0##*/}" "[ wizard ]: updates are disabled"
+					printf '{"values": {"update":"disabled"}}'
+			  fi
+			;;
+			sysupgrade)
+				get_url="$(jsonfilter -i /etc/fwupdate -qe '@.download_url')"
+				image_name="$(echo ${get_url} | grep -o '[^/]*$')"
+
+				if [ -z "$image_name" ]; then
+					logger -t "${0##*/}" "[ wizard ]: invalid name - ${image_name}"
+				else
+					sysupgrade /tmp/$image_name
+					if [ "$?" != "0" ]; then
+						logger -t "${0##*/}" "[ wizard ]: upgrade failed"
+					fi
+				fi
+			;;
+		esac
+	;;
+esac

@@ -1,0 +1,34 @@
+#!/bin/sh
+
+firstboot=$(uci get linksys.@firmware[0].eula_accepted)
+
+# If first boot, set default values.
+if [ "$firstboot" != "1" ]; then
+	# Radio 0
+	uci set wireless.radio0.channel='auto'
+	uci set wireless.radio0.htmode='VHT80'
+	uci set wireless.radio0.hwmode='11a'
+	uci set wireless.radio0._htmode_auto='1'
+	uci set wireless.radio0.opmode='28'
+
+	# Radio 1
+	uci set wireless.radio1.channel='auto'
+	uci set wireless.radio1.hwmode='11g'
+	uci set wireless.radio1.htmode='VHT'
+	uci set wireless.radio1._htmode_auto='1'
+	uci set wireless.radio1.opmode='23'
+fi
+
+pmfmode_config="$(uci show wireless | grep -w pmfmode | cut -d '=' -f1)"
+
+for x in $pmfmode_config; do
+	[ "$x" != "0" ] && uci set $x='0'
+done
+
+# Change "amsdu" option for 5GHz
+radio0=$(uci -q get wireless.@wifi-iface[0].amsdu)
+[ "$radio0" != "2" ] && $(uci set wireless.@wifi-iface[0].amsdu='2')
+
+uci commit wireless
+
+exit 0

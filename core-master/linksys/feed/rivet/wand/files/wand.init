@@ -1,0 +1,28 @@
+#!/bin/sh
+
+#
+# Required config
+#
+SERVICE="wand"
+
+. ${STREAMBOOST_CFGDIR:=/etc/streamboost3}/rc.streamboost3
+
+START=35
+STOP=65
+
+#
+# Environment config
+#
+
+#
+# Command line parameters
+#
+OPTIONS_RUN="--daemon \
+-p ${PIDFILE} \
+-n ${SERVICE} \
+"
+
+#
+# MAIN
+#
+action "$@"

@@ -1,0 +1,12 @@
+#!/bin/sh
+
+#
+# This wrapper will call the real StreamBoost3 master script and pass all the
+# parameters without any processing.
+#
+# This approach is needed so that all calls to the master script refer to the
+# same absolute path; otherwise, the FSM is unable to accurately determine how
+# many instances of itself are running at a given time.
+#
+
+${STREAMBOOST_CFGDIR:=/etc/streamboost3}/streamboost3.master "$@"

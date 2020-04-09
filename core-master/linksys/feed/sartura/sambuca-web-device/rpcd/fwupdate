@@ -1,0 +1,265 @@
+#!/bin/sh
+
+# Check for network connection
+netcon="$(sh /usr/libexec/rpcd/connection call status | jsonfilter -e '@.values.state')"
+
+do_update() {
+	# Check for update type
+	check_update="$(uci get sambuca.sambuca.update)"
+	if [ "$check_update" == "never" ]; then
+		update_check="0"
+	else
+		update_check="1"
+	fi
+
+	[ -z "$check_update" ] && update_check="1"
+}
+
+case "$1" in
+	list)
+		echo '{"check": {}, "update": {}, "valid": {}, "sysupgrade": {}, "stop": {}, "clear": {} }'
+	;;
+	call)
+	    case "$2" in
+		check)
+		    do_update
+
+			# Check for release notes
+			image_version="$(jsonfilter -i /etc/fwupdate -qe '@.version')"
+			curr_release="$(uci -q get linksys.@firmware[0].version)"
+			release_version="$(uci -q get sambuca.sambuca.release)"
+			[ -z "$release_version" ] && release_version="$curr_release"
+
+			if [ "$curr_release" != "$release_version" ]; then
+				uclient-fetch -s "http://downloads.linksys.com/downloads/releasenotes/WRT32X_Customer_Release_Notes_${curr_release}.txt" &> /dev/null
+				if [ "$?" == "0" ]; then
+					uclient-fetch -T 5 -O "/tmp/release_notes.txt" http://downloads.linksys.com/downloads/releasenotes/WRT32X_Customer_Release_Notes_${curr_release}.txt 2> /dev/null
+					if [ "$?" == "0" ]; then
+						cp /tmp/release_notes.txt /usr/release_notes.txt &> /dev/null
+						uci set sambuca.sambuca.release=$curr_version
+						uci commit sambuca
+					fi
+				fi
+			fi
+
+
+		    if [ "$update_check" == "1" ]; then
+			if [ "$netcon" == "Connected" ]; then
+
+				# Get variables for uclient request
+				mac_address="$(uci -q get linksys.@hardware[0].hw_mac_addr)"
+				hardware_version="$(uci -q get linksys.@hardware[0].hw_revision)"
+				model_number="$(uci -q get linksys.@hardware[0].modelNumber)"
+				serial_number="$(uci -q get linksys.@hardware[0].serial_number)"
+				ip_address="$(ubus call network.interface.wan status 2> /dev/null | jsonfilter -qe "@['ipv4-address'][-1].address")"
+				installed_version="$(uci -q get linksys.@firmware[0].version)"
+
+				# Send request to server
+				uclient-fetch --no-check-certificate -T 5 -O "/etc/fwupdate" \
+				"https://update1.linksys.com/api/v2/fw/update?mac_address=${mac_address}&hardware_version=${hardware_version}&model_number=${model_number}&installed_version=${installed_version}&ip_address=${ip_address}&serial_number=${serial_number}" &> /dev/null
+
+				# Removed legacy check, empty reply from server is valid
+
+				# Try to parse reply from server
+				if  [ -f "/etc/fwupdate" ]; then
+					# If file exist, get the latest version
+					latest_version="$(jsonfilter -i /etc/fwupdate -qe '@.version')"
+					# File can also be empty (server reply case), which is interprated as up-to-date
+					if [ -z "$latest_version" ]; then
+						latest_version="unavailable"
+						logger -t "${0##*/}" "[ check ]: empty reply from server, marking as up-to-date"
+					else
+						logger -t "${0##*/}" "[ check ]: version $latest_version available"
+					fi
+				# If the file doesn't exist, mark it as server error
+				else
+					echo "error" > /tmp/imagestatus
+					logger -t "${0##*/}" "[ check ]: no reply from server, marking as error"
+				fi
+
+				# Set random time for system upgrade
+				if [ "$installed_version" != "$latest_version"  -a  "$latest_version" != "unavailable" ]; then
+
+					# Check if cronjob already exist (avoid randomizing time on every update check)
+					if [ -z "$(grep -w "fwupdate update" /etc/crontabs/root)" ]; then
+						hour=$(grep -m1 -ao '[0-3]' /dev/urandom | sed s/0/0/ | head -1)
+						min1=$(grep -m1 -ao '[0-5]' /dev/urandom | sed s/0/5/ | head -1)
+						min2=$(grep -m1 -ao '[0-9]' /dev/urandom | sed s/0/9/ | head -1)
+
+						# Set random time for sysupgrade
+						echo "${min1}${min2} ${hour} * * * ubus call fwupdate update" >> /etc/crontabs/root
+						logger -t "${0##*/}" "[ check ]: sysupgrade scheduled for ${hour}:${min1}${min2}"
+						/etc/init.d/cron restart
+					else
+						hour=$(grep -w "fwupdate update" /etc/crontabs/root | cut -c3,4)
+						mins=$(grep -w "fwupdate update" /etc/crontabs/root | cut -c1,2)
+						logger -t "${0##*/}" "[ check ]: sysupgrade already scheduled for ${hour}:${mins}"
+					fi
+
+					printf '{"values": {"update":"available","version":"%s"}}', $latest_version
+				else
+					# Remove any existing cronjobs
+					sed -i '/fwupdate update/d' /etc/crontabs/root
+
+					logger -t "${0##*/}" "[ check ]: no new updates found"
+					printf '{"values": {"update":"unavailable","version":"%s"}}', $installed_version
+				fi
+			else
+				logger -t "${0##*/}" "[ check ]: no internet connection"
+				printf '{"values": {"status":"noconn"}}'
+			fi
+		    else
+			# If updates are disabled, remove any existing cronjobs
+			sed -i '/fwupdate update/d' /etc/crontabs/root
+			/etc/init.d/cron restart
+
+			logger -t "${0##*/}" "[ check ]: updates are disabled"
+			installed_version="$(uci -q get linksys.@firmware[0].version)"
+
+			printf '{"values": {"update":"disabled","version":"%s"}}', $installed_version
+		    fi
+		;;
+		update)
+			# Remove imagestatus if it exist
+			[ -f "/tmp/imagestatus" ] && rm /tmp/imagestatus
+
+			do_update
+			if [ "$update_check" == "1" ]; then
+			    if [ "$netcon" == "Connected" ]; then
+
+				# Get new release notes
+				image_version="$(jsonfilter -i /etc/fwupdate -qe '@.version')"
+				if [ ! -z "$image_version" ]; then
+					uclient-fetch -s "http://downloads.linksys.com/downloads/releasenotes/WRT3200ACM_Customer_Release_Notes_${image_version}.txt" &> /dev/null
+					if [ "$?" == "0" ]; then
+						uclient-fetch -T 5 -O "/tmp/release_notes.txt" http://downloads.linksys.com/downloads/releasenotes/WRT3200ACM_Customer_Release_Notes_${image_version}.txt 2> /dev/null
+						[ "$?" == "0" ] && cp /tmp/release_notes.txt /usr/release_notes.txt &> /dev/null
+					fi
+				fi
+
+				# Get firmware URL
+				if [ -f "/etc/fwupdate" ]; then
+					get_url="$(jsonfilter -i /etc/fwupdate -qe '@.download_url')"
+					get_md5="$(jsonfilter -i /etc/fwupdate -qe '@.md5')"
+
+					# If empty, mark as error
+					if [ -z "$get_url" ]; then
+						echo "error" > /tmp/imagestatus
+						logger -t "${0##*/}" "[ update ]: invalid firmware URL"
+					else
+						image_name="$(echo ${get_url} | grep -o '[^/]*$')"
+					fi
+
+					# Delete image is it exist
+					if [ -f "/tmp/$image_name" ]; then
+						image_md5=$(md5sum /tmp/$image_name | awk '{print $1}')
+						if [ "$get_md5" != "$image_md5" ]; then
+							rm /tmp/$image_name
+							uclient-fetch "$get_url" -P /tmp/ &> /dev/null
+						fi
+					else
+						uclient-fetch "$get_url" -P /tmp/ &> /dev/null
+					fi
+
+					logger -t "${0##*/}" "[ update ]: found firmware image - $image_name"
+
+					# Check if image exist and md5sum
+					if [ -f "/tmp/$image_name" ]; then
+
+						# Fake original md5sum until it's implemented on the server side
+						[ -z "get_md5" ] && get_md5=$(md5sum /tmp/$image_name | awk '{print $1}')
+
+						image_md5=$(md5sum /tmp/$image_name | awk '{print $1}')
+						if [ "$get_md5" == "$image_md5" ]; then
+							echo "success" > /tmp/imagestatus
+							printf '{"values": {"status":"success"}}'
+						else
+							echo "error" > /tmp/imagestatus
+							# Possible corner case
+							kill $(pgrep uclient-fetch) &> /dev/null
+							printf '{"values": {"status":"failed"}}'
+						fi
+					else
+						echo "error" > /tmp/imagestatus
+						# Make sure uclient-fetch was not left hanging
+						kill $(pgrep uclient-fetch) &> /dev/null
+						printf '{"values": {"status":"failed"}}'
+					fi
+
+					sysupgrade -T /tmp/$image_name &> /dev/null
+
+					if [ "$?" == "0" ]; then
+						logger -t "${0##*/}" "[ update ]: trying to sysupgrade"
+						sh /usr/libexec/rpcd/fwupdate call sysupgrade &> /dev/null
+						printf '{"values": {"status":"success"}}'
+					else
+						logger -t "${0##*/}" "[ update ]: invalid firmware image"
+						echo "error" > /tmp/imagestatus
+						printf '{"values": {"status":"failed"}}'
+					fi
+				fi
+			    else
+				logger -t "${0##*/}" "[ update ]: no internet connection"
+				printf '{"values": {"status":"noconn"}}'
+			    fi
+			else
+				logger -t "${0##*/}" "[ update ]: updates are disabled"
+				printf '{"values": {"update":"disabled"}}'
+			fi
+		;;
+		valid)
+			if [ -f "/tmp/uploadedfirmware.tar" ]; then
+				logger -t "${0##*/}" "[ valid ]: $(md5sum /tmp/uploadedfirmware.tar)"
+			else
+				logger -t "${0##*/}" "[ valid ]: upload failed"
+			fi
+
+			# Check if firmware image is valid (manual update only)
+			sysupgrade -T /tmp/uploadedfirmware.tar &> /dev/null
+			if [ "$?" == "0" ]; then
+				printf '{"values": {"status":"valid"}}'
+			else
+				logger -t "${0##*/}" "[ valid ]: invalid sysupgrade image"
+				printf '{"values": {"status":"invalid"}}'
+			fi
+		;;
+		sysupgrade)
+			get_url="$(jsonfilter -i /etc/fwupdate -qe '@.download_url')"
+			image_name="$(echo ${get_url} | grep -o '[^/]*$')"
+
+			if [ -z "$image_name" ]; then
+				logger -t "${0##*/}" "[ sysupgrade ]: invalid name - ${image_name}"
+				printf '{"values": {"status":"failed"}}'
+			else
+				sysupgrade /tmp/$image_name &> /dev/null
+				if [ "$?" != "0" ]; then
+					logger -t "${0##*/}" "[ sysupgrade ]: upgrade failed"
+					printf '{"values": {"status":"failed"}}'
+				else
+					printf '{"values": {"status":"success"}}'
+				fi
+			fi
+		;;
+		stop)
+			dd_proc=$(pgrep -x dd 2> /dev/null)
+			upload_proc=$(ps | grep "{binaryupload}" | head -1 | awk '{print $1}' 2> /dev/null)
+
+			kill $upload_proc 2> /dev/null && kill $dd_proc 2> /dev/null
+			rm /tmp/uploadedfirmware* 2> /dev/null
+
+			logger -t "${0##*/}" "[ sysupgrade ]: upgrade stopped"
+			printf '{ "values": {"upgrade":"stopped"}}'
+		;;
+		clear)
+			# Legacy options
+			if [ "$(uci get sambuca.sambuca.wizupgrade)" ]; then
+				uci set sambuca.sambuca.wizupgrade='0'
+				uci commit sambuca
+			fi
+			[ -f "/tmp/wizupgrade" ] && rm /tmp/wizupgrade
+
+			printf '{"values": {"status":"ok"}}'
+		;;
+	esac
+	;;
+esac

@@ -1,0 +1,6 @@
+LAN=$(ifconfig br-lan | grep "inet addr" | awk -F':' '{printf $2}' | awk '{print $1}')
+
+iptables -t nat -A PREROUTING -i br-lan -s ${LAN} -j RETURN
+iptables -t nat -A PREROUTING -p tcp --dport 80 -j DNAT --to-destination ${LAN}:80
+iptables -t nat -A PREROUTING -p tcp --dport 443 -j DNAT --to-destination ${LAN}:443
+

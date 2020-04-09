@@ -1,0 +1,12 @@
+#!/bin/sh /etc/rc.common
+
+START=20
+
+boot() {
+	wan_iface="$(uci -q get network.wan.ifname)"
+	gro_stat="$(ethtool -k $wan_iface | grep -w "generic-receive-offload" | awk '{print $2}')"
+
+	[ "$gro_stat" == "on" ]; {
+		ethtool -K $wan_iface gro off
+	}
+}

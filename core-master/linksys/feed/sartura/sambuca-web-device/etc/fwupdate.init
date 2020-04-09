@@ -1,0 +1,30 @@
+#!/bin/sh /etc/rc.common
+
+START=80
+USE_PROCD=1
+
+boot() {
+	c_version=$(uci get linksys.@firmware[0].version)
+	c_date=$(date)
+	c_conn=$(ubus call connection status | jsonfilter -e '@.values.state')
+	c_update=$(uci get sambuca.sambuca.update)
+	c_eula=$(uci get sambuca.sambuca.eula)
+	c_linksys_eula=$(uci get linksys.@firmware[0].eula_accepted)
+	c_wizupgrade=$(uci get sambuca.sambuca.wizupgrade)
+	c_firstboot=$(uci get sambuca.sambuca.first_boot)
+	c_netproto=$(uci get network.wan.proto)
+	c_netproto6=$(uci get network.wan6.proto)
+	c_cron=$(cat /etc/crontabs/root | grep -w update)
+
+	# Check for existing image
+	c_img_check=$(ls /tmp | grep FW*)
+	[ -z "$c_img_check" ] && c_img_check="none"
+
+	# Check for wizard file
+	[ -f "/tmp/wizupgrade" ] && c_wiz_check="1" || c_wiz_check="0"
+
+	logger -t "fwupdate" "time: [ ${c_date} ], ver: [ ${c_version} ], conn: [ ${c_conn} ], upd_frq: [ ${c_update} ], eula: [ ${c_eula}, ${c_linksys_eula} ], wiz: [ ${c_wizupgrade}, ${c_wiz_check}, ${c_firstboot} ], net: [ ${c_netproto}, ${c_netproto6} ]"
+	logger -t "fwupdate" "img: [ ${c_img_check} ], cron: [ ${c_cron} ], call [ boot ]"
+
+exit 0
+}

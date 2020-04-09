@@ -1,0 +1,159 @@
+#!/bin/sh
+
+#
+# Required config
+#
+SERVICE="callhome3"
+
+. ${STREAMBOOST_CFGDIR:=/etc/streamboost3}/rc.streamboost3
+
+START=99
+STOP=10
+
+CRON_CMD="streamboost3 upload; streamboost3 update && streamboost3 restart"
+CA_CERT="${CA_CERT:-${SSL_DIR}/certs/CA.cert.pem}"
+SSL_CERT="${SSL_CERT:-${SSL_DIR}/certs/client_cert.pem}"
+SSL_KEY="${SSL_KEY:-${SSL_DIR}/private/client_key.pem}"
+ARCHIVE_FILE=${STAT_FILE:-"/tmp/streamboost3.stat.log"}
+
+auth_curl() {
+	curl --cacert ${CA_CERT} --cert ${SSL_CERT} --key ${SSL_KEY} "$@"
+}
+
+upload() {
+	# TODO: we don't return on a failure of FLUSHCACHE or
+	# PUBLISHANDRESETSTATS because the nxserver could drop our message.
+	# Instead, we continue to try and upload the current log.
+	# In the future we'll want to handle specific error responses.
+	echo -n "${SERVICE} requesting stats... "
+	nxcli -q "PUBLISHANDRESETSTATS" -t "*" >/dev/null 2>&1
+	if [ ! $? -eq 0 ]; then
+		echo "[ FAIL ]"
+		sb_logger "${SERVICE} failed to request stats!"
+	else
+		echo "[ OK ]"
+	fi
+
+	echo -n "${SERVICE} flushing cache..."
+	nxcli -q "FLUSHCACHE" -t "nxstat" >/dev/null 2>&1
+	if [ ! $? -eq 0 ]; then
+		echo "[ FAIL ]"
+		sb_logger "failed to flush cache!"
+	else
+		echo "[ OK ]"
+	fi
+
+	echo -n "${SERVICE} uploading stats... "
+	if [ -z ${ARCHIVE_FILE} ]; then
+		echo "[ FAIL ]"
+		sb_logger "Missing ${ARCHIVE_FILE}!"
+		return 3
+	fi
+
+	if [ ! -r ${ARCHIVE_FILE} ]; then
+		echo "[ FAIL ]"
+		sb_logger "File ${ARCHIVE_FILE} does not exist or is not readable!"
+		return 4
+	fi
+
+	if [ -z ${UPLOAD_HOST} ]; then
+		echo "[ FAIL ]"
+		sb_logger "No UPLOAD_HOST defined!"
+		return 5
+	fi
+
+	local TIMESTR=$(date "+%s")
+	local NEWFILE=${ARCHIVE_FILE}.${TIMESTR}.upload
+	local URL="https://${UPLOAD_HOST}/api/v1/upload/"
+
+	mv ${ARCHIVE_FILE} ${NEWFILE} 2>/dev/null
+	if [ ! $? -eq 0 ]; then
+		echo "[ FAIL ]"
+		sb_logger "Failed to backup ${ARCHIVE_FILE} to ${NEWFILE}!"
+		return 6
+	fi
+
+	local uuid=$(streamboost3 get system.uuid)
+
+	local retval=0
+	auth_curl --form uploadfile=@"${NEWFILE}" --form uuid=$uuid $URL 2>/dev/null
+	retval=$?
+	rm -f ${NEWFILE} 2>/dev/null
+	if [ ! ${retval} = 0 ]; then
+		echo "[ FAIL ]"
+		sb_logger "Failed to upload stats!"
+		return 7
+	fi
+
+	echo "[ OK ]"
+}
+
+boot() {
+	start "$@"
+}
+
+start() {
+	local retval=0
+	echo -n "Booting ${SERVICE}... "
+	if ! find_in_cron "${CRON_CMD}"; then
+		local cron_cmd=$(build_cron "${CRON_CMD}" "12")
+		add_to_cron "${cron_cmd}"
+		retval=$?
+	fi
+	[ ${retval} -eq 0 ] && echo "[ OK ]" || echo "[ FAIL ]"
+	return ${retval}
+}
+
+stop() {
+	echo "Stop ${SERVICE}... [ OK ]"
+	return 0
+}
+
+shutdown() {
+	local retval=0
+	echo -n "Shutdown ${SERVICE}... "
+	remove_from_cron "${CRON_CMD}"
+	retval=$?
+	[ ${retval} -eq 0 ] && echo "[ OK ]" || echo "[ FAIL ]"
+	return ${retval}
+}
+
+status() {
+	local state=0 enabled=0
+	# Check if we are enabled
+	enabled 1>/dev/null && {
+		enabled=1
+	}
+	# Check if we are in the crontab
+	find_in_cron "${CRON_CMD}"
+	if [ $? = 0 ]; then
+		state=1
+	fi
+
+	# return if the --verbose flag was not set and disabled and not running
+	if [ -z "$VERBOSE" -a $enabled = 0 -a $state = 0 ]; then
+		return 0
+	fi
+
+	# If the verbose flag is set then echo our enabled state
+	if [ "$VERBOSE" = "yes" ]; then
+		[ $enabled = 0 ] && echo -n "[ DISABLED ]" || echo -n "[ ENABLED ]"
+	fi
+
+	# ehco our current state
+	if [ $state = 1 ]; then
+		echo "[  UP  ] ${SERVICE} is running."
+	else
+		echo "[ DOWN ] ${SERVICE} is not running."
+	fi
+}
+
+info() {
+	echo "${SERVICE} info"
+	default_info_disk "$@"
+}
+
+#
+# MAIN
+#
+action "$@"

@@ -1,0 +1,62 @@
+#!/bin/sh
+
+case "$1" in
+        list)
+                echo '{ "on": {}, "off": {}, "status": {}}'
+        ;;
+        call)
+                case "$2" in
+                        off)
+                                uci show system | grep ".trigger" | grep -iv "power" > /etc/leds
+                                uci show system | grep ".default" | grep -iv "power" >> /etc/leds
+
+				while read LEDS; do
+                                        local LED=$(echo "$LEDS" | awk -F '=' '{print $1}')
+                                        if [ $(echo "$LED" | awk -F '.' '{print $3}') == "default" ]; then
+                                                local UCI_COMMAND="$LED=0"
+                                        else
+                                                local UCI_COMMAND="$LED=none"
+                                        fi
+
+                                        uci set $UCI_COMMAND
+                                        uci commit system
+
+                                        /etc/init.d/led restart > /dev/null
+                                done < /etc/leds
+
+				iwpriv wdev0 setcmd "led off"
+				iwpriv wdev1 setcmd "led off"
+				echo off > /sys/devices/platform/10.mvsw61xx/lan_leds
+				uci set sambuca.sambuca.led='0'
+				uci commit sambuca
+                                printf '{ "values": { "led":"off" }}'
+                        ;;
+                        on)
+                                while read LEDS; do
+                                        local UCI_COMMAND=$(echo "$LEDS" | tr -d \')
+
+                                        uci set $UCI_COMMAND
+                                        uci commit system
+
+                                        /etc/init.d/led restart > /dev/null
+                                done < /etc/leds
+
+				iwpriv wdev0 setcmd "led on"
+				iwpriv wdev1 setcmd "led on"
+				echo on > /sys/devices/platform/10.mvsw61xx/lan_leds
+				uci set sambuca.sambuca.led='1'
+				uci commit sambuca
+                                printf '{ "values": { "led":"on" }}'
+                        ;;
+			status)
+				st=$(uci get sambuca.sambuca.led)
+
+				if [ $st -eq 1 ] ; then
+	                                printf '{ "values": { "led":"on" }}'
+				else
+	                                printf '{ "values": { "led":"off" }}'
+				fi
+			;;
+                esac
+        ;;
+esac

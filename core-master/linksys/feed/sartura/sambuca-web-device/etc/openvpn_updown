@@ -1,0 +1,75 @@
+#!/bin/sh
+
+echo "remote1: $remote_1"
+echo "script_context: $script_context"
+echo "script_type: $script_type"
+echo "signal: $signal"
+echo "trusted_ip: $trusted_ip"
+echo "untrusted_ip: $untrusted_ip"
+
+#use wan gateway in a case when it is different than ovpn detected gateway
+gateway=$route_net_gateway
+echo "gateway1: $gateway"
+gateway2=$(ubus call network.interface.wan status 2>/dev/null | jsonfilter -e '@.route[@.target="0.0.0.0"].nexthop' 2>/dev/null)
+echo "gateway2: $gateway2"
+[ "$gateway" != "$gateway2" ] && [ "$gateway2" ] && gateway=$gateway2
+echo "gateway: $gateway"
+
+cleanup() {
+	#remove ovpn resolv file and set system resolv file to be last modified because of dnsmasq pooling stuff
+	rm /tmp/resolv.conf.openvpn 2> /dev/null
+	touch /tmp/resolv.conf.auto
+}
+
+case $script_type in
+  up)
+	ubus call network.interface.vpn0 set_data '{ "status": "up", "last_context": "'$script_context'" }'
+
+	cleanup
+
+	#iterate over pushed options and store vpn dns servers to ovpn resolv file
+	c=1
+	while true ; do
+ 		v=foreign_option_$c
+ 		eval "fo=\$$v"
+ 		[ -n "$fo" ] || break
+
+ 		if [ "${fo%% *}" == "dhcp-option" ]; then
+  			s=${fo#dhcp-option }
+  			if [ "${s%% *}" == "DNS" ]; then
+				echo "nameserver ${s#DNS }"
+  		 		echo "nameserver ${s#DNS }" >> /tmp/resolv.conf.openvpn
+  			fi
+ 		fi
+		c=$(( $c+1 ))
+	done
+ 	;;
+  down)
+	ubus call network.interface.vpn0 set_data '{ "status": "down", "last_context": "'$script_context'" }'
+
+	#recreate default route to vpn server in case of a wan up/down
+	#in case there is no default gateway on wan, restart vpn
+	if [ "$script_context" == "restart" ]; then
+		if [ -z "$gateway" ]; then
+			echo "gateway empty"
+			cleanup
+        	        /etc/init.d/openvpn restart
+                	exit
+		fi
+
+		#can't resolve host
+		if [[ -n "$remote_1" ]] && [[ -z "$trusted_ip" ]]; then
+			echo "dns fail"
+			cleanup
+			/etc/init.d/openvpn restart
+			exit
+		fi
+
+		echo "execute /sbin/route add -net $trusted_ip netmask 255.255.255.255 gw $gateway"
+		/sbin/route add -net $trusted_ip netmask 255.255.255.255 gw $gateway
+	fi
+
+	cleanup
+	;;
+esac
+

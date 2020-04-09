@@ -1,0 +1,117 @@
+#!/bin/sh
+#
+# Copyright (C) 2017 OpenWrt.org
+#
+
+. /lib/functions/system.sh
+. /lib/mvebu.sh
+
+board=$(mvebu_board_name)
+
+case "$board" in
+armada-385-linksys-venom)
+
+# set the new firmware version number
+	uci set linksys.@firmware[0].version=VERSION
+
+# extract defaults from devinfo
+	strings /dev/mtd3 |sed -e "s/^/set\ linksys.@hardware[0]./" -e "s/\=/\=\'/g" -e "s/$/\'/" > /tmp/devinfo.uci
+	uci batch < /tmp/devinfo.uci
+	uci commit linksys
+
+# migrate from DSA to mvsw61xx
+wanifname=$(uci -q get network.wan.ifname)
+
+# check for vlan ID's
+vlanId=$(uci -q get network.wan.vlanId)
+if [[ ! -z "$vlanId" ]]; then
+	if [[ "$(uci get network.wan.ifname | cut -d '.' -f2)" == "$vlanId" ]]; then
+		pppoe_vlan=1
+	else
+		pppoe_vlan=0
+	fi
+fi
+
+if [[ "$wanifname" != "eth0" -a "$pppoe_vlan" != "1" ]]; then
+	logger -t switch-migration "migrating network config from DSA"
+	uci set network.lan.ifname='eth1'
+	uci set network.wan.ifname='eth0'
+	uci set network.wan6.ifname='eth0'
+	uci add network switch
+	uci set network.@switch[0].name='switch0'
+	uci set network.@switch[0].reset='1'
+	uci set network.@switch[0].enable_vlan='1'
+	uci add network switch_vlan
+	uci set network.@switch_vlan[0].device='switch0'
+	uci set network.@switch_vlan[0].vlan='1'
+	uci set network.@switch_vlan[0].ports='0 1 2 3 6'
+	uci add network switch_vlan
+	uci set network.@switch_vlan[1].device='switch0'
+	uci set network.@switch_vlan[1].vlan='2'
+	uci set network.@switch_vlan[1].ports='4 5'
+	uci commit network
+fi
+
+# disable ULA prefixes, as it causes isses with certain EA games
+	uci delete network.globals
+
+eula_accepted=$(uci get linksys.@firmware[0].eula_accepted)
+if [[ $eula_accepted != 1 ]]; then
+
+	DEFPASS=$(uci get linksys.@hardware[0].default_passphrase)
+	SSID=$(uci get linksys.@hardware[0].default_ssid)
+
+# set wifi region
+
+region=$(uci get linksys.@hardware[0].cert_region)
+
+case "region" in
+	CN)
+		uci set wireless.@wifi-device[0].regioncode=0x91
+		uci set wireless.@wifi-device[1].regioncode=0x91
+	;;
+	AU)
+		uci set wireless.@wifi-device[0].regioncode=0x81
+		uci set wireless.@wifi-device[1].regioncode=0x81
+	;;
+	AH)
+		uci set wireless.@wifi-device[0].regioncode=0x90
+		uci set wireless.@wifi-device[1].regioncode=0x90
+	;;
+esac
+
+# set default ssids
+	uci set wireless.@wifi-iface[0].ssid=$SSID
+	uci set wireless.@wifi-iface[1].ssid=$SSID
+
+# set default wpa2 passwords
+	uci set wireless.@wifi-iface[0].encryption=psk2
+	uci set wireless.@wifi-iface[0].key=$DEFPASS
+	uci set wireless.@wifi-iface[1].encryption=psk2
+	uci set wireless.@wifi-iface[1].key=$DEFPASS
+	uci commit wireless
+
+# set hostname
+	uci set system.@system[0].hostname=$SSID
+	uci commit system
+	echo $SSID > /proc/sys/kernel/hostname
+
+# disable the WAN
+	uci set network.wan.disabled=1
+	uci set network.wan6.disabled=1
+	uci commit network
+
+# enable miniupnpd
+	uci set upnpd.config.enabled=1
+	uci commit upnpd
+
+# configure minidlna
+	uci set minidlna.config.friendly_name=$SSID
+	uci add_list minidlna.config.media_dir=/netshare
+	uci commit minidlna
+fi
+
+;;
+esac
+
+exit 0

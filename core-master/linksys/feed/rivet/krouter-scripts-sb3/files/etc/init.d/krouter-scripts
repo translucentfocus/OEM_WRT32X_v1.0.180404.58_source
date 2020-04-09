@@ -1,0 +1,17 @@
+#!/bin/sh /etc/rc.common
+
+START=51
+USE_PROCD=1
+
+start_service() {
+	krouter-start
+}
+
+reload_service() {
+	krouter-start
+}
+
+service_triggers()
+{
+        procd_add_reload_trigger "krouter"
+}

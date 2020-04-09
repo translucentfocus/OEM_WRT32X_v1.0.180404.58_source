@@ -1,0 +1,26 @@
+{
+        "unauthenticated": {
+                "description": "Access controls for unauthenticated requests",
+                "read": {
+                        "ubus": {
+                                "session": [
+                                        "access",
+                                        "login"
+                                ],
+                                "sambuca": [
+                                        "hint",
+					"id",
+					"firstboot",
+					"lang"
+                                ]
+                        }
+                },
+
+		"write": {
+			"ubus": {
+				"sambuca": [ "setlang" ]
+				 }
+			}
+	        }
+}
+

@@ -1,0 +1,93 @@
+#!/bin/sh
+
+#
+# Required config
+#
+SERVICE="bwestd3"
+
+. ${STREAMBOOST_CFGDIR:=/etc/streamboost3}/rc.streamboost3
+
+START=80
+STOP=30
+
+CRON_CMD="nxcli -t ${SERVICE} -q PUBLISHANDRESETSTATS"
+MIN_BETWEEN_BWSTATS=15
+
+#
+# config
+#
+# path to binary
+BWEST_UPLOADABLE_DIR=${BWEST_UPLOADABLE_DIR:-${RUNDIR}/bwest3}
+
+# WAN/LAN Interfaces to use
+L_IFACE=${LAN_IFACE:-br-lan}
+W_IFACE=${WAN_IFACE:-eth0}
+
+# endpoint definitions
+ENDPOINT_HOST=${ENDPOINT_HOST:-"www.google.com"}
+ENDPOINT_PORT=${ENDPOINT_PORT:-8888}
+
+# Format the command line parameters
+OPTIONS_RUN="\
+--daemon \
+--pid-file=${PIDFILE} \
+--path-endpoint=${ENDPOINT_HOST} \
+--path-endpoint-port=${ENDPOINT_PORT} \
+--dump-path=${BWEST_UPLOADABLE_DIR} \
+--lan-interface=${L_IFACE} \
+--wan-interface=${W_IFACE} "
+
+#
+# Functions
+#
+
+start() {
+	[ ! -d "${RUNDIR}" ] && {
+		mkdir -p ${RUNDIR}
+	}
+
+	[ ! -d "${BWEST_UPLOADABLE_DIR}" ] && {
+		mkdir -p ${BWEST_UPLOADABLE_DIR}
+	}
+
+	if use_nss; then
+		OPTIONS_RUN="${OPTIONS_RUN} --use-nss"
+	fi
+
+	if find_in_cron "${CRON_CMD}"; then
+		remove_from_cron "${CRON_CMD}"
+	fi
+
+	local cron_cmd=$(build_cron "${CRON_CMD}" "*" "*/${MIN_BETWEEN_BWSTATS}")
+	add_to_cron "${cron_cmd}"
+
+	default_start "$@"
+
+	# After bwested3 is started, if developer env. var NOSPEED is not set to skip speedtest,
+	# speedtest is executed in the background with arg --setbwestd3, which will cause it
+	# to set bwestd.upload_limit, bwestd.download_limit, bwestd.download_min, and bwestd.upload_min
+	# based on speedtest results.
+	if [ "${NOSPEED}" == "1" ]
+	then
+		echo SKIPPING speedtest
+	else
+		if [ -f /var/run/smartbyte-speedtest.pid ]; then
+			pid_file_size="$(wc -c <"/var/run/smartbyte-speedtest.pid")"
+			if [ ! "$pid_file_size" == "0" ]; then
+				kill $(cat /var/run/smartbyte-speedtest.pid)
+				rm /var/run/smartbyte-speedtest.pid
+			fi
+		fi
+
+		savedir="$(pwd)"
+		( cd /tmp; speedtest --setbwestd3 & )
+		cd "$savedir"
+	fi
+}
+
+stop() {
+	remove_from_cron "${CRON_CMD}"
+	default_stop "$@"
+}
+
+action "$@"

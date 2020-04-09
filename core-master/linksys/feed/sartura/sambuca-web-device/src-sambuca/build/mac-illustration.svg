@@ -1,0 +1,122 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="304" height="209" viewBox="0 0 304 209">
+    <defs>
+        <linearGradient id="d" x1="50%" x2="50%" y1="0%" y2="100%">
+            <stop offset="0%" stop-color="#1463B3"/>
+            <stop offset="100%" stop-color="#3DF0FF"/>
+        </linearGradient>
+        <path id="c" d="M0 0h337v222H0z"/>
+        <rect id="g" width="288.102" height="195.571" x="-13.216" y="39.643" rx="7.92"/>
+        <filter id="f" width="200%" height="200%" x="-50%" y="-50%" filterUnits="objectBoundingBox">
+            <feMorphology in="SourceAlpha" operator="dilate" radius="12" result="shadowSpreadOuter1"/>
+            <feOffset dy="2" in="shadowSpreadOuter1" result="shadowOffsetOuter1"/>
+            <feGaussianBlur in="shadowOffsetOuter1" result="shadowBlurOuter1" stdDeviation="11.5"/>
+            <feComposite in="shadowBlurOuter1" in2="SourceAlpha" operator="out" result="shadowBlurOuter1"/>
+            <feColorMatrix in="shadowBlurOuter1" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.5 0"/>
+        </filter>
+        <path id="a" d="M0 0h233.602v168.874c0 3.182-2.583 5.76-5.745 5.76H5.745A5.747 5.747 0 0 1 0 168.875V0z"/>
+        <filter id="h" width="200%" height="200%" x="-50%" y="-50%" filterUnits="objectBoundingBox">
+            <feMorphology in="SourceAlpha" operator="dilate" radius="1.66" result="shadowSpreadOuter1"/>
+            <feOffset dy="5" in="shadowSpreadOuter1" result="shadowOffsetOuter1"/>
+            <feGaussianBlur in="shadowOffsetOuter1" result="shadowBlurOuter1" stdDeviation="3.5"/>
+            <feComposite in="shadowBlurOuter1" in2="SourceAlpha" operator="out" result="shadowBlurOuter1"/>
+            <feColorMatrix in="shadowBlurOuter1" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.256878397 0"/>
+        </filter>
+        <mask id="i" width="234.922" height="175.955" x="-.66" y="-.66">
+            <path fill="#fff" d="M-.66-.66h234.922v175.955H-.66z"/>
+            <use xlink:href="#a"/>
+        </mask>
+        <filter id="k" width="200%" height="200%" x="-50%" y="-50%" filterUnits="objectBoundingBox">
+            <feOffset dy="1" in="SourceAlpha" result="shadowOffsetOuter1"/>
+            <feGaussianBlur in="shadowOffsetOuter1" result="shadowBlurOuter1" stdDeviation="1"/>
+            <feColorMatrix in="shadowBlurOuter1" result="shadowMatrixOuter1" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.258095562 0"/>
+            <feMerge>
+                <feMergeNode in="shadowMatrixOuter1"/>
+                <feMergeNode in="SourceGraphic"/>
+            </feMerge>
+        </filter>
+        <path id="b" d="M.747.275A.58.58 0 0 0 .17.868c.11 6.713.24 13.611.34 19.44a.6.6 0 0 0 .356.533.594.594 0 0 0 .628-.12l3.676-3.574c1.195 2.51 2.376 5.026 3.574 7.535.066.138.187.25.331.3.144.051.313.041.45-.026 1.59-.773 2.923-1.418 4.355-2.113a.59.59 0 0 0 .272-.79l-3.583-7.534c1.683-.225 3.368-.446 5.051-.67a.6.6 0 0 0 .484-.421.61.61 0 0 0-.187-.619C10.81 8.527 5.52 4.094 1.13.412A.602.602 0 0 0 .747.275z"/>
+        <mask id="l" width="17.263" height="26.047" x="-.654" y="-.654">
+            <path fill="#fff" d="M-.484-.379h17.263v26.047H-.484z"/>
+            <use xlink:href="#b"/>
+        </mask>
+    </defs>
+    <g fill="none" fill-rule="evenodd">
+        <g transform="translate(0 -13)">
+            <mask id="e" fill="#fff">
+                <use xlink:href="#c"/>
+            </mask>
+            <rect width="288.102" height="195.571" x="-13.216" y="39.643" fill="#B3B3B3" stroke="#C6C6C6" stroke-linejoin="round" stroke-width="31.2" mask="url(#e)" rx="7.92"/>
+            <g mask="url(#e)">
+                <use fill="#000" filter="url(#f)" xlink:href="#g"/>
+                <use fill="#B3B3B3" stroke="#363636" stroke-linejoin="round" stroke-width="24" xlink:href="#g"/>
+            </g>
+            <g mask="url(#e)">
+                <g transform="translate(14.537 76.643)">
+                    <mask id="j" fill="#fff">
+                        <use xlink:href="#a"/>
+                    </mask>
+                    <use fill="#000" filter="url(#h)" xlink:href="#a"/>
+                    <use fill="#F5F6F8" xlink:href="#a"/>
+                    <use stroke="#AAA" stroke-width="1.32" mask="url(#i)" xlink:href="#a"/>
+                    <text fill="#B0B6BB" font-family="HelveticaNeue, Helvetica Neue" font-size="10.066" letter-spacing=".072" mask="url(#j)">
+                        <tspan x="18.032" y="14.099">Wi-Fi: Looking for Networks</tspan> <tspan x="145.604" y="14.099">…</tspan>
+                    </text>
+                    <text fill="#414344" font-family="HelveticaNeue, Helvetica Neue" font-size="10.066" letter-spacing=".216" mask="url(#j)">
+                        <tspan x="18.032" y="29.677">Turn Wi-Fi Of</tspan> <tspan x="80.123" y="29.677">f</tspan>
+                    </text>
+                    <text fill="#414344" font-family="HelveticaNeue, Helvetica Neue" font-size="10.066" letter-spacing=".072" mask="url(#j)">
+                        <tspan x="18.032" y="130.523">Join Other Network...</tspan>
+                    </text>
+                    <text fill="#414344" font-family="HelveticaNeue, Helvetica Neue" font-size="10.066" letter-spacing=".216" mask="url(#j)">
+                        <tspan x="18.032" y="146.1">Create Network…</tspan>
+                    </text>
+                    <path stroke="#E4E5E7" stroke-linecap="square" stroke-width="1.438" d="M-24.18 38.534h257.51M-24.18 113.144h257.51" mask="url(#j)"/>
+                </g>
+                <path fill="#3D8CFA" d="M14.537 117.637H248.14v18.857H14.537z"/>
+                <g fill="#FFF">
+                    <path d="M229.872 131.226a1.477 1.477 0 0 1 2.109 0l-1.054 1.067-1.055-1.067zm-2.107-2.13a4.432 4.432 0 0 1 6.323 0l-1.053 1.064a2.958 2.958 0 0 0-4.217 0l-1.053-1.065zm-2.108-2.133a7.39 7.39 0 0 1 5.27-2.21 7.39 7.39 0 0 1 5.269 2.21l-1.052 1.064a5.912 5.912 0 0 0-4.217-1.766 5.912 5.912 0 0 0-4.218 1.766l-1.052-1.064zm5.27-5.227c2.877 0 5.486 1.184 7.376 3.096l-1.05 1.063a8.866 8.866 0 0 0-6.326-2.65 8.868 8.868 0 0 0-6.327 2.65l-1.05-1.063a10.347 10.347 0 0 1 7.377-3.096z"/>
+                    <text font-family="HelveticaNeue, Helvetica Neue" font-size="10.066" transform="translate(31.75 119.892)">
+                        <tspan x="0" y="10.205">Your Wi-Fi Name</tspan>
+                    </text>
+                    <path d="M212.074 126.656h.093c.401 0 .727.325.727.727v4.285a.73.73 0 0 1-.727.727h-6.742a.727.727 0 0 1-.727-.727v-4.285a.73.73 0 0 1 .727-.727h.092V124.2a3.284 3.284 0 0 1 3.279-3.284c1.81 0 3.278 1.47 3.278 3.284v2.455zm-.82 0V124.2a2.462 2.462 0 0 0-2.458-2.465 2.464 2.464 0 0 0-2.46 2.465v2.455h4.919z"/>
+                </g>
+                <path fill="#434445" d="M229.872 148.444a1.477 1.477 0 0 1 2.109 0l-1.054 1.066-1.055-1.066zm-2.107-2.131a4.432 4.432 0 0 1 6.323 0l-1.053 1.064a2.958 2.958 0 0 0-4.217 0l-1.053-1.064zm-2.108-2.132a7.39 7.39 0 0 1 5.27-2.211 7.39 7.39 0 0 1 5.269 2.211l-1.052 1.064a5.912 5.912 0 0 0-4.217-1.767 5.912 5.912 0 0 0-4.218 1.767l-1.052-1.064zm5.27-5.227c2.877 0 5.486 1.184 7.376 3.095l-1.05 1.063a8.866 8.866 0 0 0-6.326-2.65 8.868 8.868 0 0 0-6.327 2.65l-1.05-1.063a10.347 10.347 0 0 1 7.377-3.095z"/>
+                <text fill="#414344" font-family="HelveticaNeue, Helvetica Neue" font-size="10.066" transform="translate(31.75 137.314)">
+                    <tspan x="0" y="10">Office Wi-Fi</tspan>
+                </text>
+                <path fill="#434445" d="M212.074 143.873h.093c.401 0 .727.325.727.727v4.286a.73.73 0 0 1-.727.726h-6.742a.727.727 0 0 1-.727-.726V144.6a.73.73 0 0 1 .727-.727h.092v-2.454a3.284 3.284 0 0 1 3.279-3.285c1.81 0 3.278 1.47 3.278 3.285v2.454zm-.82 0v-2.454a2.462 2.462 0 0 0-2.458-2.465 2.464 2.464 0 0 0-2.46 2.465v2.454h4.919z"/>
+                <g>
+                    <path fill="#434445" d="M229.872 164.842a1.477 1.477 0 0 1 2.109 0l-1.054 1.066-1.055-1.066zm-2.107-2.132a4.432 4.432 0 0 1 6.323 0l-1.053 1.065a2.958 2.958 0 0 0-4.217 0l-1.053-1.065zm-2.108-2.131a7.39 7.39 0 0 1 5.27-2.211 7.39 7.39 0 0 1 5.269 2.21l-1.052 1.064a5.912 5.912 0 0 0-4.217-1.766 5.912 5.912 0 0 0-4.218 1.766l-1.052-1.063zm5.27-5.227c2.877 0 5.486 1.183 7.376 3.095l-1.05 1.063a8.866 8.866 0 0 0-6.326-2.65 8.868 8.868 0 0 0-6.327 2.65l-1.05-1.063a10.347 10.347 0 0 1 7.377-3.095z"/>
+                    <text fill="#414344" font-family="HelveticaNeue, Helvetica Neue" font-size="10.066" transform="translate(31.75 153.712)">
+                        <tspan x="0" y="10">Home Media</tspan>
+                    </text>
+                    <path fill="#434445" d="M212.074 160.27h.093c.401 0 .727.326.727.728v4.285a.73.73 0 0 1-.727.727h-6.742a.727.727 0 0 1-.727-.727v-4.285a.73.73 0 0 1 .727-.727h.092v-2.454a3.284 3.284 0 0 1 3.279-3.285c1.81 0 3.278 1.47 3.278 3.285v2.454zm-.82 0v-2.453a2.462 2.462 0 0 0-2.458-2.465 2.464 2.464 0 0 0-2.46 2.465v2.454h4.919z"/>
+                </g>
+                <g>
+                    <path fill="#434445" d="M229.872 181.24a1.477 1.477 0 0 1 2.109 0l-1.054 1.066-1.055-1.067zm-2.107-2.132a4.432 4.432 0 0 1 6.323 0l-1.053 1.065a2.958 2.958 0 0 0-4.217 0l-1.053-1.065zm-2.108-2.132a7.39 7.39 0 0 1 5.27-2.21 7.39 7.39 0 0 1 5.269 2.21l-1.052 1.064a5.912 5.912 0 0 0-4.217-1.767 5.912 5.912 0 0 0-4.218 1.767l-1.052-1.064zm5.27-5.227c2.877 0 5.486 1.184 7.376 3.095l-1.05 1.064a8.866 8.866 0 0 0-6.326-2.65 8.868 8.868 0 0 0-6.327 2.65l-1.05-1.064a10.347 10.347 0 0 1 7.377-3.095z"/>
+                    <text fill="#414344" font-family="HelveticaNeue, Helvetica Neue" font-size="10.066" transform="translate(31.75 170.11)">
+                        <tspan x="0" y="10">Guest Network</tspan>
+                    </text>
+                    <path fill="#434445" d="M212.074 176.669h.093c.401 0 .727.325.727.726v4.286a.73.73 0 0 1-.727.727h-6.742a.727.727 0 0 1-.727-.727v-4.286a.73.73 0 0 1 .727-.726h.092v-2.455a3.284 3.284 0 0 1 3.279-3.285c1.81 0 3.278 1.471 3.278 3.285v2.455zm-.82 0v-2.455a2.462 2.462 0 0 0-2.458-2.465 2.464 2.464 0 0 0-2.46 2.465v2.455h4.919z"/>
+                </g>
+            </g>
+        </g>
+        <path fill="#F3F3F3" d="M0 35.893h262.644v27.75H0z"/>
+        <path fill="#358EFB" d="M15.652 35.893h38.156v28.345H15.652z"/>
+        <path fill="#FFF" d="M34.73 39.758c-5.46 0-10.41 2.246-13.99 5.872l1.271 1.289c3.256-3.299 7.745-5.339 12.72-5.339 4.973 0 9.462 2.04 12.718 5.339l1.272-1.289c-3.58-3.626-8.53-5.872-13.99-5.872zm0 5.467a14.19 14.19 0 0 0-10.175 4.278l1.28 1.28a12.378 12.378 0 0 1 8.896-3.736c3.49 0 6.63 1.421 8.896 3.737l1.279-1.281a14.19 14.19 0 0 0-10.175-4.278zm0 5.466c-2.468 0-4.722 1.015-6.366 2.655l1.265 1.296c1.324-1.321 3.117-2.128 5.101-2.128s3.778.807 5.102 2.128l1.265-1.296c-1.644-1.64-3.898-2.655-6.367-2.655zm0 5.467c-.99 0-1.891.407-2.544 1.068l2.544 2.577 2.544-2.577a3.568 3.568 0 0 0-2.544-1.068z"/>
+        <g fill="#393F44">
+            <path d="M225.466 43.4h2.444v2.4h-2.444zM230.355 43.4h17.111v2.4h-17.11zM230.355 48.2H243.8v2.4h-13.444zM230.355 53h17.111v2.4h-17.11zM225.466 48.2h2.444v2.4h-2.444zM225.466 53h2.444v2.4h-2.444z"/>
+        </g>
+        <text fill="#3B4144" font-family="HelveticaNeue, Helvetica Neue" font-size="14" letter-spacing="-.14" transform="translate(0 -13)">
+            <tspan x="125.544" y="66.8">Tue 12:27</tspan>
+        </text>
+        <g stroke="#393F44" stroke-width="1.5" transform="translate(199.326 42.84)">
+            <circle cx="5.115" cy="5.115" r="5.115"/>
+            <path stroke-linecap="round" d="M9.154 9.154l4.457 4.698"/>
+        </g>
+        <g filter="url(#k)" transform="translate(160.705 114.2)">
+            <use fill="#000" xlink:href="#b"/>
+            <use stroke="#FFF" stroke-width="1.307" mask="url(#l)" xlink:href="#b"/>
+        </g>
+    </g>
+</svg>

@@ -1,0 +1,17 @@
+#!/bin/sh /etc/rc.common
+
+START=99
+USE_PROCD=1
+
+start_service() {
+	# In case there is leftover configuration, remove it to avoid strange things (e.g power outage)
+	oldconf=$(uci show usbconf | grep -w .device | cut -d '.' -f,1,2)
+	for x in $oldconf; do
+		uci delete $x
+	done
+
+	# Save changes
+	uci commit usbconf
+
+	/sbin/usb-detect mount
+}
